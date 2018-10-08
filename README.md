@@ -1,2 +1,2 @@
 # agke
-Anisotropic Generalized Kolmogorov Equations (AGKE) for 
+Generalized Kolmogorov Equation (GKE) for turbulent channels and other plane geometries
