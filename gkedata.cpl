@@ -2,6 +2,13 @@
 ! Data structures for the parallel computation 
 ! of the Generalized Kolmogorov Equation (GKE)
 !
+! -----------------------------------------------------------------------------
+! If you use this code and find it helpful please cite
+! 
+! D. Gatti et al., "An efficient numerical method for the Generalized Kolmogorov
+! Equation", Journal of Turbulence, (submitted, 2018)
+! -----------------------------------------------------------------------------
+!
 ! Copyright (C) 2018  Dr. Davide Gatti
 !
 ! This program is free software: you can redistribute it and/or modify
@@ -16,7 +23,7 @@
 !
 ! You should have received a copy of the GNU General Public License
 ! along with this program.  If not, see <https://www.gnu.org/licenses/>.
-!
+! 
 ! Contacts:
 !
 ! Dr. Davide Gatti  
