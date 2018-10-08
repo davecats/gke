@@ -1,0 +1,89 @@
+! 
+! This program computes the deriatives in the Y1 and Y2 direction (i.e. in ry and Y)
+! required for the wall-normal scale and space fluxes of the Generalized Kolmogorov Equations (GKE) 
+! 
+! This program allows distributed memory parallelization by distributing
+! the arrays containing the terms of the Generalized Kolmogorov Equations (GKE) 
+! along the wall-normal direction. 
+! 
+! ------------------------------------------------------------------------------
+! 
+! Copyright (C) 2018  Dr. Davide Gatti
+! 
+! This program is free software: you can redistribute it and/or modify
+! it under the terms of the GNU General Public License as published by
+! the Free Software Foundation, either version 3 of the License, or
+! any later version.
+!
+! This program is distributed in the hope that it will be useful,
+! but WITHOUT ANY WARRANTY; without even the implied warranty of
+! MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+! GNU General Public License for more details.
+!
+! You should have received a copy of the GNU General Public License
+! along with this program.  If not, see <https://www.gnu.org/licenses/>.
+!
+! Contacts:
+!
+! Dr. Davide Gatti  
+! davide.gatti [at] kit.edu
+! msc.davide.gatti [at] gmail.com
+! 
+! Karlsruhe Institute of Technology
+! Institute of Fluid Dynamics
+! Kaiserstraße 10
+! 76131 Karlsruhe 
+! 
+
+USE ../gkedata
+USE wallclock
+REAL t1,t2,t3,t4
+
+! Compute Derivatives
+! -------------------------------
+SHARED ARRAY(0..startpos(ny DIV 2 +1)-1,0..mz-1) OF GKETERMS gkemem=0,gkememM=0
+INLINE FUNCTION indx(INTEGER i,j)=startpos(i)+j-i
+INLINE FUNCTION gkeP(INTEGER i,j)=gkemem(indx(i,j),iz)
+INLINE FUNCTION gkeM(INTEGER i,j)=gkememM(indx(i,j),(mz-iz) MOD mz)
+! Symmetry-aware helper functions to get correct indices
+INLINE FUNCTION gkeiy2(INTEGER i,j)=(IF j<i THEN gkeM(j,i) ELSE IF j>ny-i THEN gkeM(ny-j,ny-i) ELSE gkeP(i,j))
+! INLINE FUNCTION gkeiy1(INTEGER i,j)=(IF i>ny DIV 2 THEN gkeiy2(j,i) ELSE gkeiy2(i,j))   XXX WRONG?
+INLINE FUNCTION gkeiy1(INTEGER i,j)=[IF i>ny DIV 2 THEN (IF j=ny-i THEN gkeM(j,i) ELSE gkeP(ny-i,ny-j)) ELSE gkeiy2(i,j)]
+
+! Derive final terms
+! -------------------------------
+LOOP derivatives FOR ix=0 TO mx-1  
+        WRITE "ix = ", ix, " of ", mx-1, ": Reading data..."; t1=wallclock();
+        gkemem=gkedata(*,ix,*); gkememM=gkedata(*,(mx-ix) MOD (mx),*); 
+        t2=wallclock();  WRITE "ix = ", ix, " of ", mx-1, ":Reading took ", t2-t1, " seconds"
+        WRITE "ix = ", ix, " of ", mx-1, ":Computing derivatives... "; t1=wallclock();
+        LOOP FOR iz=0 TO mz-1
+          ! y2-derivatives
+          LOOP FOR IY1=-1 TO ny DIV 2
+            LOOP FOR IY2=IY1 TO ny-IY1
+              j=[IF IY2=-1 THEN 2 ELSE IF IY2=0 THEN 1 ELSE IF IY2=ny THEN -1 ELSE IF IY2=ny+1 THEN -2 ELSE 0]
+              WITH derivs(IY2):
+                gkemem(indx(IY1,IY2),iz).phiC    =~-[SUM 0.5*ni*d1(i)*gkeiy2(IY1,IY2+i+j).scaleENER FOR i=-2 TO 2]
+                gkemem(indx(IY1,IY2),iz).phiR(2) =~-[SUM     ni*d1(i)*gkeiy2(IY1,IY2+i+j).scaleENER FOR i=-2 TO 2]
+            REPEAT
+          REPEAT
+          ! y1-derivatives
+          LOOP FOR IY1=-1 TO ny DIV 2
+            j=[IF IY1=-1 THEN 2 ELSE IF IY1=0 THEN 1 ELSE IF IY1=ny THEN -1 ELSE IF IY1=ny+1 THEN -2 ELSE 0]
+            LOOP FOR IY2=IY1 TO ny-IY1
+              WITH derivs(IY1):
+                gkemem(indx(IY1,IY2),iz).phiC    =~-[SUM 0.5*ni*d1(i)*gkeiy1(IY1+i+j,IY2).scaleENER FOR i=-2 TO 2]
+                gkemem(indx(IY1,IY2),iz).phiR(2) =~+[SUM     ni*d1(i)*gkeiy1(IY1+i+j,IY2).scaleENER FOR i=-2 TO 2]
+            REPEAT
+          REPEAT
+        REPEAT
+        t2=wallclock();  WRITE "ix = ", ix, " of ", mx-1, ":Computing took ", t2-t1, " seconds"
+        WRITE "ix = ", ix, " of ", mx-1, ":Writing data..."; t1=wallclock();
+        gkedata(*,ix,*) = gkemem(*,*)
+        t2=wallclock();  WRITE "ix = ", ix, " of ", mx-1, ":Writing took ", t2-t1, " seconds"
+REPEAT derivatives
+<*printf("\r                                            \r");*>
+CLOSE(gkedata)
+CLOSE(uiujimage)
+
+

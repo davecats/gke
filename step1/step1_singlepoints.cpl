@@ -1,0 +1,161 @@
+! 
+! This program computes and stores the single-point budgets of the Reynolds 
+! stress tensor. Some terms are used to compute the Generalized Kolmogorov Equation (GKE)
+! 
+! ------------------------------------------------------------------------------
+!
+! Copyright (C) 2018  Dr. Davide Gatti
+!
+! This program is free software: you can redistribute it and/or modify
+! it under the terms of the GNU General Public License as published by
+! the Free Software Foundation, either version 3 of the License, or
+! any later version.
+!
+! This program is distributed in the hope that it will be useful,
+! but WITHOUT ANY WARRANTY; without even the implied warranty of
+! MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+! GNU General Public License for more details.
+!
+! You should have received a copy of the GNU General Public License
+! along with this program.  If not, see <https://www.gnu.org/licenses/>.
+!
+! Contacts:
+!
+! Dr. Davide Gatti  
+! davide.gatti [at] kit.edu
+! msc.davide.gatti [at] gmail.com
+! 
+! Karlsruhe Institute of Technology
+! Institute of Fluid Dynamics
+! Kaiserstraße 10
+! 76131 Karlsruhe 
+! 
+
+USE ../gkedata
+
+! Definitions
+! ------------------------------------
+#define cprod(f,g,h) h.REAL=f.REAL*g.REAL; h.IMAG=f.IMAG*g.IMAG
+#define cprod3(f,g,k,h) h.REAL=f.REAL*g.REAL*k.REAL; h.IMAG=f.IMAG*g.IMAG*k.IMAG
+
+SHARED ARRAY(0..nx,-nz..nz,-1..ny+1) OF DERIVS Vder=0
+
+DERPRODSEXT = STRUCTURE(COMPLEX ux2,vx2,wx2,uy2,vy2,wy2,uz2,vz2,wz2,uxvx,uyvy,uzvz,uxwx,uywy,uzwz,vxwx,vywy,vzwz)
+SHARED ARRAY(0..nxd-1,0..nzd-1) OF DERIVS Vderd=0
+SHARED ARRAY(0..nxd-1,0..nzd-1) OF DERPRODSEXT VVderd=0
+SHARED ARRAY(0..nxd-1,0..nzd-1,1..6) OF COMPLEX PHIttrspd=0
+
+SHARED ARRAY(-1..ny+1) OF MEANTERMS meantot=0
+SHARED ARRAY(-1..ny+1) OF BALANCE uiujtot=0
+SHARED ARRAY(-1..ny+1) OF MKETERMS mketot=0
+
+! Compute the average field
+! ------------------------------------
+LOOP files FOR n=nfmin TO nfmax BY dn
+  STRING field_name = WRITE("Dati.cart."n".fld"); diskimage = OPEN(field_name)
+  STRING pressure_name = WRITE('pField'n'.fld');  pressuredata=OPEN(pressure_name)
+  WITH meantot(*),diskimage.Vimage(-1..ny+1,0,0):
+    U=~+u.REAL; W=~+w.REAL; P=~+pressuredata(-1..ny+1,0,0).REAL
+  CLOSE(diskimage); CLOSE(pressuredata)
+REPEAT files
+WITH meantot: U=~/nftot; W=~/nftot; P=~/nftot
+WITH meantot:  deriv(U, Uy);  deriv(W, Wy);   
+WITH meantot: deriv2(U, Uyy); deriv2(W, Wyy); 
+
+! Compute the TKE budget
+! ------------------------------------
+LOOP fields FOR n=nfmin TO nfmax BY dn
+  ! Read field
+  STRING field_name = WRITE("Dati.cart."n".fld"); diskimage = OPEN(field_name); Vtot=diskimage.Vimage; CLOSE diskimage
+  STRING pressure_name = WRITE('pField'n'.fld');  pressuredata=OPEN(pressure_name); ptot=pressuredata; CLOSE pressuredata
+  ! Compute fluctuating field
+  WITH meantot(*),Vtot(*,0,0),Vder(0,0,*): u.REAL=~-U; w.REAL=~-W; ptot(*,0,0)=~-P;
+  ! Compute derivatives
+  velocity_gradient(Vder)
+  ! Parseval theorem method for var and pstrain
+  LOOP FOR iy=-1 TO ny+1 WITH uiujtot(iy):
+    LOOP FOR ALL ix,iz WITH Vtot(iy,ix,iz),Vder(ix,iz,iy):
+      pp == ptot(iy,ix,iz)
+      c=IF ix=0 THEN 1 ELSE 2
+      var(1) = ~ + c*(u|u).REAL; var(2) = ~ + c*(v|v).REAL; var(3) = ~ + c*(w|w).REAL
+      var(4) = ~ + c*(u|v).REAL; var(5) = ~ + c*(u|w).REAL; var(6) = ~ + c*(v|w).REAL
+      PHIptrsp(2) = ~ - 2*c*(v|pp).REAL; PHIptrsp(4) = ~ - c*(u|pp).REAL;  PHIptrsp(6) = ~ - c*(w|pp).REAL
+      pstrain(1) = ~ + 2*c*[ux|pp].REAL; pstrain(4) = ~ + c*[(uy|pp)+(vx|pp)].REAL
+      pstrain(2) = ~ + 2*c*[vy|pp].REAL; pstrain(5) = ~ + c*[(uz|pp)+(wx|pp)].REAL
+      pstrain(3) = ~ + 2*c*[wz|pp].REAL; pstrain(6) = ~ + c*[(vz|pp)+(wy|pp)].REAL
+    REPEAT
+  REPEAT
+  ! Pseudo-spectral method for psdiss and PHIttrsp
+  PARALLEL LOOP FOR ismp=0 TO nsmp-1
+  LOOP FOR iy=-1 TO ny+1
+    LOOP FOR ix=ismp*(nx+1) DIV nsmp TO (ismp+1)*(nx+1) DIV nsmp -1
+      Vderd(ix,0..nz)=Vder(ix,0..nz,iy); Vderd(ix,nz+1..nzd-nz-1)=0; Vderd(ix,nzd+(-nz..-1))=Vder(ix,-nz..-1,iy)
+      Vd(ix,0..nz)=Vtot(iy,ix,0..nz);    Vd(ix,nz+1..nzd-nz-1)=0;    Vd(ix,nzd+(-nz..-1))=Vtot(iy,ix,-nz..-1)
+      WITH Vderd(ix,*): INLINE LOOP FOR ii IN (ux,vx,wx,uy,vy,wy,uz,vz,wz); IFT(ii); REPEAT
+      WITH Vd(ix,*):    INLINE LOOP FOR i  IN (u,v,w); IFT(i); REPEAT
+    REPEAT LOOP
+    IF ismp=0 THEN Vd(nx+1..nxd-1)=0; Vderd(nx+1..nxd-1)=0
+    SYNC(ismp,nsmp)
+    DO
+      WITH Vderd(*,iz): INLINE LOOP FOR ii IN (ux,vx,wx,uy,vy,wy,uz,vz,wz); RFT(ii); REPEAT
+      WITH Vd(*,iz):    INLINE LOOP FOR i  IN (u,v,w); RFT(i); REPEAT
+      DO WITH Vderd(ix,iz), VVderd(ix,iz), Vd(ix,iz):
+          cprod(ux,ux,ux2);  cprod(uy,uy,uy2);  cprod(uz,uz,uz2);  cprod(vx,vx,vx2);  cprod(vy,vy,vy2);  cprod(vz,vz,vz2)
+          cprod(wx,wx,wx2);  cprod(wy,wy,wy2);  cprod(wz,wz,wz2);  cprod(ux,vx,uxvx); cprod(uy,vy,uyvy); cprod(uz,vz,uzvz)
+          cprod(ux,wx,uxwx); cprod(uy,wy,uywy); cprod(uz,wz,uzwz); cprod(vx,wx,vxwx); cprod(vy,wy,vywy); cprod(vz,wz,vzwz)
+          cprod3(v,u,u,PHIttrspd(ix,iz,1));   cprod3(v,v,v,PHIttrspd(ix,iz,2));    cprod3(v,w,w,PHIttrspd(ix,iz,3))
+          cprod3(u,v,v,PHIttrspd(ix,iz,4));   cprod3(u,v,w,PHIttrspd(ix,iz,5));    cprod3(v,v,w,PHIttrspd(ix,iz,6));
+      FOR ALL ix
+      WITH VVderd(*,iz): INLINE LOOP FOR iii IN (ux2,vx2,wx2,uy2,vy2,wy2,uz2,vz2,wz2,uxvx,uyvy,uzvz,uxwx,uywy,uzwz,vxwx,vywy,vzwz); HFT(iii); REPEAT
+      DO HFT(PHIttrspd(*,iz,i)) FOR ALL i
+    FOR iz=ismp*(HI+1) DIV nsmp TO (ismp+1)*(HI+1) DIV nsmp -1
+    SYNC(ismp,nsmp)
+    DO WITH VVderd(ix,*):
+      INLINE LOOP FOR iii IN (ux2,vx2,wx2,uy2,vy2,wy2,uz2,vz2,wz2,uxvx,uyvy,uzvz,uxwx,uywy,uzwz,vxwx,vywy,vzwz); FFT(iii); REPEAT
+      DO FFT(PHIttrspd(ix,*,i)); FOR ALL i
+    FOR ix=ismp*(nx+1) DIV nsmp TO (ismp+1)*(nx+1) DIV nsmp -1
+    SYNC(ismp,nsmp)
+    IF ismp=0 THEN WITH VVderd(0,0), uiujtot(iy):
+      psdiss(1)=~+2*ni*REAL[ux2+uy2+uz2]; psdiss(4)=~+2*ni*REAL[uxvx+uyvy+uzvz]; PHIttrsp(1)=~-PHIttrspd(0,0,1).REAL; PHIttrsp(4)=~-PHIttrspd(0,0,4).REAL
+      psdiss(2)=~+2*ni*REAL[vx2+vy2+vz2]; psdiss(5)=~+2*ni*REAL[uxwx+uywy+uzwz]; PHIttrsp(2)=~-PHIttrspd(0,0,2).REAL; PHIttrsp(4)=~-PHIttrspd(0,0,5).REAL
+      psdiss(3)=~+2*ni*REAL[wx2+wy2+wz2]; psdiss(6)=~+2*ni*REAL[vxwx+vywy+vzwz]; PHIttrsp(3)=~-PHIttrspd(0,0,3).REAL; PHIttrsp(4)=~-PHIttrspd(0,0,6).REAL
+    END IF
+  REPEAT LOOP
+  REPEAT LOOP
+REPEAT fields
+
+! var,PHIttrsp,psdiss,pstrain
+DO WITH uiujtot(iy): var(i)=~/nftot; PHIptrsp(i)=~/nftot; PHIttrsp(i)=~/nftot; psdiss(i)=~/nftot; pstrain(i)=~/nftot FOR ALL i,iy
+! PHIvdiff, vdiff
+DO WITH uiujtot:  deriv(var(*,i),PHIvdiff(*,i)); PHIvdiff(*,i)=~*ni; FOR ALL i;
+DO WITH uiujtot: deriv2(var(*,i),vdiff(*,i));    vdiff(*,i)=~*ni;    FOR ALL i;
+! ttrsp
+DO WITH uiujtot: deriv(PHIttrsp(*,i),ttrsp(*,i)); FOR ALL i;
+! ptrsp
+DO WITH uiujtot: deriv(PHIptrsp(*,i),ptrsp(*,i)); FOR ALL i;
+! prod
+DO WITH meantot(iy), uiujtot(iy): prod(1)=-2*var(4)*Uy; prod(3)=-2*var(6)*Wy; prod(4)=-var(2)*Uy; prod(5)=-var(4)*Wy-var(6)*Uy; prod(6)=-var(2)*Wy; FOR ALL iy
+DO WITH meantot(iy), uiujtot(iy), mketot(iy): produv=-0.5*prod(1); prodvw=-0.5*prod(3) FOR ALL iy
+! dissU(MKE) and dissW(MKE)
+DO WITH meantot(iy), mketot(iy): dissU=ni*Uy^2; dissW=ni*Wy^2 FOR ALL iy
+! ttrsp(MKE)
+DO WITH meantot(iy), uiujtot(iy), mketot(iy): mketot(iy).PHIttrsp=-var(4)*U-var(6)*W FOR ALL iy
+WITH mketot: deriv(PHIttrsp,ttrsp); 
+! vdiff(MKE)
+DO WITH meantot(iy), mketot(iy): PHIvdiff=ni*(U*Uy+W*Wy) FOR ALL iy
+WITH mketot: deriv(PHIvdiff,vdiff);  
+! pump(MKE)
+WITH mketot,mean: pump=ni*U*0.5*(Uy(0)-Uy(ny))
+
+! Write to binary file
+! ------------------------------------
+uiujimage = OPEN("uiuj.bin")
+WITH uiujimage:
+    meandata(-1..ny+1)=meantot(-1..ny+1)
+    mkedata(-1..ny+1)=mketot(-1..ny+1)
+    uiujdata(-1..ny+1)=uiujtot(-1..ny+1)
+CLOSE(uiujimage)
+
+! Be polite and say goodbye
+! ------------------------------------
+IF has_terminal THEN WRITE "Finished!"

@@ -1,0 +1,251 @@
+! 
+! Data structures for the parallel computation 
+! of the Generalized Kolmogorov Equation (GKE)
+!
+! Copyright (C) 2018  Dr. Davide Gatti
+!
+! This program is free software: you can redistribute it and/or modify
+! it under the terms of the GNU General Public License as published by
+! the Free Software Foundation, either version 3 of the License, or
+! any later version.
+!
+! This program is distributed in the hope that it will be useful,
+! but WITHOUT ANY WARRANTY; without even the implied warranty of
+! MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+! GNU General Public License for more details.
+!
+! You should have received a copy of the GNU General Public License
+! along with this program.  If not, see <https://www.gnu.org/licenses/>.
+!
+! Contacts:
+!
+! Dr. Davide Gatti  
+! davide.gatti [at] kit.edu
+! msc.davide.gatti [at] gmail.com
+! 
+! Karlsruhe Institute of Technology
+! Institute of Fluid Dynamics
+! Kaiserstraße 10
+! 76131 Karlsruhe 
+! 
+
+USE fft
+USE rbmat
+USE parallel
+
+! Parameters
+! -----------------------------
+nsmp=32
+nfmin=20
+nfmax=36
+dn=2
+path="gke.bin"
+uLx1=200.0/1000.0; uLx2=0.5;
+uLz1=200.0/1000.0; uLz2=0.5;
+
+! -----------------------------
+INTEGER nftot=[(nfmax-nfmin) DIV dn]+1
+INTEGER ismp=0
+
+! Parallel - initialization 
+! -------------------------------------------
+INTEGER iproc,nproc
+IF COMMANDLINE.HI<1 THEN iproc=1; nproc=1 ELSE
+iproc=atoi(COMMANDLINE(1)); nproc=atoi(COMMANDLINE(2)); END IF
+bufsize=800; baseport=IPPORT_USERRESERVED+111
+FILE prev,next
+first==(iproc=1); last==(iproc=nproc); has_terminal==last
+
+! Read dns.in
+! -------------------------------------------
+INTEGER ny,nx,nz
+REAL alfa0, beta0, a, ymin, ymax, t_max, dt_field, dt_save
+REAL u_conv, u0, un, w_conv, w0, wn, t0, tn
+REAL ni,pr,gr,meanpx=-99,meanpz=-99,meanflowx=-99,meanflowz=-99,px=0,corrpx=0,pz=0,corrpz=0,flowx=0,flowz=0,deltat=0, cflmax=0, time=0
+BOOLEAN time_from_restart
+STRING restart_file
+
+FILE in_data=OPEN("dns.in")
+READ BY NAME FROM in_data ny,nx,nz,alfa0,beta0,ymin,ymax,a,ni,pr,gr; ni=1/ni; pr=1/pr;
+DO WHILE READ BY NAME FROM in_data meanpx OR meanflowx
+DO WHILE READ BY NAME FROM in_data meanpz OR meanflowz
+READ BY NAME FROM in_data u_conv, w_conv
+READ BY NAME FROM in_data u0, un, w0, wn, t0, tn
+DO WHILE READ BY NAME FROM in_data deltat OR cflmax
+READ BY NAME FROM in_data t_max, time_from_restart, dt_field, dt_save
+IF NOT READ BY NAME FROM in_data restart_file THEN restart_file=""
+CLOSE in_data
+IF has_terminal THEN
+  WRITE BY NAME nproc,nsmp
+  WRITE BY NAME nx, nz, ny, time
+  WRITE BY NAME meanflowx, meanpx, meanflowz, meanpz
+  WRITE BY NAME ymin, ymax, a, alfa0, beta0, 1/ni, 1/pr
+  WRITE BY NAME u_conv, u0, un, w_conv, w0, wn, t0, tn
+  WRITE BY NAME deltat, cflmax, t_max, dt_save, dt_field
+END IF
+
+! Grid in y direction and finite differences operators
+! -------------------------------------------
+REAL y(-1..ny+1)
+DO y(i)=ymin+0.5*(ymax-ymin)*[tanh(a*(2*i/ny-1))/tanh(a)+0.5*(ymax-ymin)] FOR ALL i !Channel
+STRUCTURE[ARRAY(-2..2) OF REAL d1,d2] derivs(-1..ny+1)
+INLINE REAL FUNCTION D1(REAL f(*)) = d1(-2)*f(-2)+d1(-1)*f(-1)+d1(0)*f(0)+d1(1)*f(1)+d1(2)*f(2)
+INLINE REAL FUNCTION D2(REAL f(*)) = d2(-2)*f(-2)+d2(-1)*f(-1)+d2(0)*f(0)+d2(1)*f(1)+d2(2)*f(2)
+INLINE COMPLEX FUNCTION D1(COMPLEX f(*)) = D1(f.REAL)+I*D1(f.IMAG)
+INLINE COMPLEX FUNCTION D2(COMPLEX f(*)) = D2(f.REAL)+I*D2(f.IMAG)
+LOOP FOR iy=-1 TO ny+1 WITH derivs(iy):
+  ARRAY(0..4,0..4) OF REAL matder=0
+  ARRAY(0..4) OF REAL tnder=0
+  shift=INTEGER((iy<1))*(-iy+1) - INTEGER((iy>(ny-1)))*(iy-ny+1)
+  DO matder(ir,ic) = (y(iy-2+ic+shift)-y(iy))^(4-ir) FOR ic=0 TO 4 AND ir=0 TO 4
+  LUdecomp matder
+  d1=0; tnder=0; tnder(3) = 1
+  d1(-2+(*)) = matder\tnder
+  d2=0; tnder=0; tnder(2) = 2
+  d2(-2+(*)) = matder\tnder
+REPEAT
+nyl=-1+(iproc-1)*(ny DIV 2 +2) DIV nproc; nyh=iproc*(ny DIV 2 +2) DIV nproc -2
+
+! Size of Fourier-transformable arrays
+! -------------------------------------------
+INTEGER nxd=3*nx DIV 2 - 1; DO INC nxd UNTIL FFTfit(nxd)
+INTEGER nzd=3*nz - 1; DO INC nzd UNTIL FFTfit(nzd)
+ARRAY(-nz..nz) OF INTEGER izdV=0; DO izdV(iz)=IF iz>=0 THEN iz ELSE nzd+iz FOR iz=-nz TO nz
+nxc=(2*nxd); nzc=nzd; izd==izdV(iz)
+dx=PI/alfa0/nxd; dz=2*PI/beta0/nzd
+IF has_terminal THEN WRITE BY NAME nxc,nzc
+
+! Types
+! -------------------------------------------
+VELOCITY = STRUCTURED ARRAY(u,v,w) OF COMPLEX
+MOMFLUX  = STRUCTURED ARRAY(uu,vv,ww,uv,uw,vw) OF COMPLEX
+
+GKETERMS = STRUCTURE(ARRAY(1..3) OF REAL phiR; REAL phiC, scaleENER, scalePROD)
+MEANTERMS = STRUCTURE(REAL U,W,Uy,Wy,Uyy,Wyy,P) 
+MKETERMS = STRUCTURE(REAL pump,produv,prodvw,ttrsp,vdiff,dissU,dissW,PHIttrsp,PHIvdiff) 
+BALANCE = STRUCTURE(ARRAY(1..6) OF REAL var,prod,psdiss,ttrsp,vdiff,pstrain,ptrsp,PHIttrsp,PHIvdiff,PHIptrsp) 
+
+! Definitions
+! -------------------------------------------
+SHARED ARRAY(1..2) OF MEANTERMS mean
+SHARED ARRAY(1..2) OF BALANCE uiuj
+SHARED ARRAY(0..nx,-nz..nz,1..2) OF COMPLEX p=0
+SHARED ARRAY(0..nx,-nz..nz,1..2) OF VELOCITY V=0
+
+SHARED ARRAY(-1..ny+1,0..nx,-nz..nz) OF VELOCITY Vtot=0
+SHARED ARRAY(-1..ny+1,0..nx,-nz..nz) OF COMPLEX ptot=0
+
+SHARED ARRAY(0..nxd-1,0..nzd-1) OF VELOCITY Vd=0
+SHARED ARRAY(0..nxd-1,0..nzd-1,1..2) OF MOMFLUX VVd=0
+SHARED ARRAY(0..nx,-nz..nz) OF VELOCITY bufV=0
+SHARED ARRAY(0..nx,-nz..nz) OF COMPLEX bufp=0
+
+! Disk images
+! -------------------------------------------
+POINTER TO STORED STRUCTURE(
+  ARRAY(0..1023) OF CHAR header
+  ARRAY(-1..ny+1,0..nx,-nz..nz) OF VELOCITY Vimage
+  ) diskimage
+POINTER TO STORED ARRAY(-1..ny+1,0..nx,-nz..nz) OF COMPLEX pressuredata 
+POINTER TO STORED STRUCTURE[
+        ARRAY(-1..ny+1) OF MEANTERMS meandata
+        ARRAY(-1..ny+1) OF MKETERMS mkedata
+        ARRAY(-1..ny+1) OF BALANCE uiujdata
+] uiujimage
+
+! Define Undersampled arrays
+! ------------------------------
+INTEGER mx=0; ARRAY(0..nxc) OF INTEGER imx=0
+INTEGER mz=0; ARRAY(0..nzc) OF INTEGER imz=0
+MODULE
+  INTEGER ix=0
+  LOOP WHILE ix<nxc DIV 2
+    imx(mx)=ix; INC mx; ix=~+[IF ix*dx<=uLx1 THEN 1 ELSE [IF ix*dx<=uLx2 THEN 4 ELSE 8]]
+  REPEAT
+  IF imx(mx-1)<nxc DIV 2 THEN imx(mx)=nxc DIV 2; INC mx
+  DO imx(mx+i-1)=(2*nxd-imx(mx-i-1)) MOD (2*nxd)  FOR i=1 TO mx-2; mx = 2*~-2
+  INTEGER iz=0
+  LOOP WHILE iz<nzc DIV 2
+    imz(mz)=iz; INC mz; iz=~+[IF iz*dz<=uLz1 THEN 1 ELSE [IF iz*dz<=uLz2 THEN 4 ELSE 8]]
+  REPEAT
+  IF imz(mz-1)<nzc DIV 2 THEN imz(mz)=nzc DIV 2; INC mz
+  DO imz(mz+i-1)=(nzd-imz(mz-i-1)) MOD (nzd)  FOR i=1 TO mz-2; mz = 2*~-2
+END MODULE
+WRITE BY NAME mx,mz
+
+! Definitions
+! -----------------------------
+INTEGER startpos(-1..ny DIV 2 +1)=0
+DO startpos(iy+1)=startpos(iy)+(ny-2*iy+1) FOR iy=-1 TO ny DIV 2
+POINTER TO STORED ARRAY(0..startpos(ny DIV 2 +1)-1,0..mx-1,0..mz-1) OF GKETERMS gkedata
+
+! Load MEANTERMS and BALANCE
+! ------------------------------
+uiujimage=OPEN("uiuj.bin"); WITH uiujimage: mean=meandata; uiuj=uiujdata;
+
+! Open data for output and set everything to zero
+! ------------------------------
+gkedata=OPEN(path)
+IF has_terminal THEN WRITE "Will require " SIZEOF(ARRAY(0..startpos(ny DIV 2 +1)-1,0..mx-1,0..mz-1) OF GKETERMS)/(1024.0**3) " GiB on disk..."
+IF has_terminal THEN WRITE "Computing Kolmogorov Equation..."
+
+! Pseudo-spectral convolutions
+! ------------------------------
+SUBROUTINE convolutions(ARRAY(*,*) OF VELOCITY Vplane; POINTER TO ARRAY(*,*) OF MOMFLUX VVplane)
+  LOOP FOR ix=ismp*(nx+1) DIV nsmp TO (ismp+1)*(nx+1) DIV nsmp -1
+    Vd(ix,0..nz)=Vplane(ix,0..nz)
+    Vd(ix,nz+1..nzd-nz-1)=0
+    Vd(ix,nzd+(-nz..-1))=Vplane(ix,-nz..-1)
+    WITH Vd(ix,*): IFTU(u); IFTU(v); IFTU(w)
+  REPEAT LOOP
+  IF ismp=0 THEN Vd(nx+1..nxd-1)=0
+  SYNC(ismp,nsmp)
+  DO
+    WITH Vd(*,iz): RFTU(u); RFTU(v); RFTU(w)
+    DO WITH Vd(ix,iz), VVplane(ix,iz)
+      uu.REAL=u.REAL*u.REAL; uu.IMAG=u.IMAG*u.IMAG
+      uv.REAL=u.REAL*v.REAL; uv.IMAG=u.IMAG*v.IMAG
+      vv.REAL=v.REAL*v.REAL; vv.IMAG=v.IMAG*v.IMAG
+      vw.REAL=v.REAL*w.REAL; vw.IMAG=v.IMAG*w.IMAG
+      ww.REAL=w.REAL*w.REAL; ww.IMAG=w.IMAG*w.IMAG
+      uw.REAL=u.REAL*w.REAL; uw.IMAG=u.IMAG*w.IMAG
+    FOR ALL ix
+    WITH VVplane(*,iz): HFTU(uu); HFTU(uv); HFTU(vv); HFTU(vw); HFTU(ww); HFTU(uw)
+  FOR iz=ismp*(HI+1) DIV nsmp TO (ismp+1)*(HI+1) DIV nsmp -1
+  SYNC(ismp,nsmp)
+  DO WITH VVplane(ix,*): FFTU(uu); FFTU(uv); FFTU(vv); FFTU(vw); FFTU(ww); FFTU(uw)
+  FOR ix=ismp*(nx+1) DIV nsmp TO (ismp+1)*(nx+1) DIV nsmp -1
+END convolutions
+
+! Subroutines for derivatives and velocity gradient 
+! -------------------------------------------------
+SUBROUTINE deriv2(ARRAY(*) OF REAL f0,f2^)
+  DO 
+     shift=INTEGER((iy<1))*(-iy+1) - INTEGER((iy>(ny-1)))*(iy-ny+1)
+     WITH derivs(iy) f2(iy) = (SUM d2(i)*f0(iy+i+shift) FOR i=-2 TO 2) 
+  FOR iy=-1 TO ny+1
+END deriv2
+
+SUBROUTINE deriv(ARRAY(*) OF REAL f0,f1^)
+  DO 
+     shift=INTEGER((iy<1))*(-iy+1) - INTEGER((iy>(ny-1)))*(iy-ny+1)
+     WITH derivs(iy) f1(iy) = (SUM d1(i)*f0(iy+i+shift) FOR i=-2 TO 2) 
+  FOR iy=-1 TO ny+1
+END deriv
+
+DERIVS = STRUCTURE(COMPLEX ux,uy,uz,vx,vy,vz,wx,wy,wz)
+SUBROUTINE velocity_gradient(POINTER TO ARRAY(*,*,*) OF DERIVS Vder)
+  LOOP FOR ix=0 TO nx
+    ialfa = I*alfa0*ix
+    LOOP FOR iz=-nz TO nz WITH Vder(ix,iz,*), Vtot(*,ix,iz)
+      ibeta = I*beta0*iz
+      ux(*)=ialfa*u(*); vx(*)=ialfa*v(*); wx(*)=ialfa*w(*)
+      uz(*)=ibeta*u(*); vz(*)=ibeta*v(*); wz(*)=ibeta*w(*)
+      deriv(u(*).REAL,uy.REAL); deriv(u(*).IMAG,uy.IMAG)
+      deriv(v(*).REAL,vy.REAL); deriv(v(*).IMAG,vy.IMAG)
+      deriv(w(*).REAL,wy.REAL); deriv(w(*).IMAG,wy.IMAG)
+    REPEAT
+  REPEAT
+END velocity_gradient
+
+
