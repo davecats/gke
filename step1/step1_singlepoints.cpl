@@ -36,6 +36,7 @@
 ! 76131 Karlsruhe 
 ! 
 
+#define wholefield
 USE ../gkedata
 
 ! Definitions

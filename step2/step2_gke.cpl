@@ -10,7 +10,11 @@
 ! 
 ! ------------------------------------------------------------------------------
 ! 
-! Another slower version of this program with a lower memory bur higher I/O requirement is provided.
+! Comment "#define wholefield" to reduce memory requirement by reading only one
+! (iy1,iy2) pair of velocity planes at a time. This increases the amount of I/O 
+! and supposedly slows down calculations
+! 
+#define wholefield
 ! 
 ! ------------------------------------------------------------------------------
 ! If you use this code and find it helpful please cite
@@ -60,10 +64,14 @@ SHARED ARRAY(1..2,1..2,0..nxd-1,0..nzd-1) OF STRUCTURE(COMPLEX UU,VV,WW,UV,PV,uu
 LOOP files FOR if=nfmin TO nfmax BY dn
  WRITE "iproc=",iproc, "   ","file ", if, " of ", nfmax;
  ! Open V and P fields
+ STRING field_name = WRITE("Dati.cart."if".fld"); diskimage = OPEN(field_name);
+ STRING pressure_name = WRITE('pField'if'.fld');  pressuredata=OPEN(pressure_name);
+#ifdef wholefield
  WRITE "iproc=",iproc, "   ","Reading data..."; t1=wallclock();
- STRING field_name = WRITE("Dati.cart."if".fld"); diskimage = OPEN(field_name); Vtot=diskimage.Vimage; CLOSE diskimage
- STRING pressure_name = WRITE('pField'if'.fld');  pressuredata=OPEN(pressure_name); ptot=pressuredata; CLOSE pressuredata; t2=wallclock();
+  Vtot=diskimage.Vimage; CLOSE diskimage
+  ptot=pressuredata; CLOSE pressuredata; t2=wallclock();
  WRITE "iproc=",iproc, "   ","Reading took ", t2-t1, " seconds"
+#endif
    LOOP outer FOR IY1=nyl TO nyh; 
      WRITE "iproc=",iproc, "   ", "   ", "IY1= ",IY1, "of", nyh; gke(IY1+(0..ny-2*IY1),*,*)=0; t1=wallclock();
      ! Reload data for this IY1, need for averaging "on disk"
@@ -74,7 +82,12 @@ LOOP files FOR if=nfmin TO nfmax BY dn
         ! Symmetry-aware helper variable  
         iy1=IF sig=1 THEN IY1 ELSE ny-IY1
         ! Open V and p field
+#ifdef wholefield
         V(*,*,1)=Vtot(iy1,*,*); mean(1)=uiujimage.meandata(iy1); p(*,*,1)=ptot(iy1,*,*); uiuj(1)=uiujimage.uiujdata(iy1)
+#else
+        bufV = diskimage.Vimage(iy1,*,*); V(*,*,1)=bufV; mean(1)=uiujimage.meandata(iy1); uiuj(1)=uiujimage.uiujdata(iy1)
+        pressuredata=OPEN(pressure_name); bufp = pressuredata(iy1,*,*); p(*,*,1)=bufp; 
+#endif
         ! Remove mean
         WITH mean(1),V(0,0,1): u.REAL=~-U; w.REAL=~-W; p(0,0,1)=~-P;
         PARALLEL LOOP FOR ismp=0 TO nsmp-1
@@ -83,7 +96,12 @@ LOOP files FOR if=nfmin TO nfmax BY dn
             iy2 = IF sig=1  THEN IY2 ELSE ny-IY2
             ! Open V and p field, remove mean
             IF ismp=0 THEN 
+#ifdef wholefield
               V(*,*,2)=Vtot(iy2,*,*); p(*,*,2)=ptot(iy2,*,*); mean(2)=uiujimage.meandata(iy2); uiuj(2)=uiujimage.uiujdata(iy2); 
+#else
+              bufV = diskimage.Vimage(iy2,*,*); V(*,*,2)=bufV; mean(2)=uiujimage.meandata(iy2);
+              bufp = pressuredata(iy2,*,*);     p(*,*,2)=bufp; uiuj(2)=uiujimage.uiujdata(iy2);
+#endif
               WITH mean(2),V(0,0,2): u.REAL=~-U; w.REAL=~-W; p(0,0,2)=~-P;
             END IF
             SYNC(ismp,nsmp)
@@ -150,6 +168,8 @@ LOOP files FOR if=nfmin TO nfmax BY dn
      gkedata(startpos(IY1)+(0..ny-2*IY1),*,*)=gke(IY1+(0..ny-2*IY1),*,*); t4=wallclock();
      WRITE "iproc=",iproc,"   ", "   ", "   ", "Writing took ", t4-t3, " seconds"
   REPEAT outer
+  CLOSE(diskimage)
+  CLOSE(pressuredata)
 REPEAT files
 
 CLOSE(gkedata)

@@ -139,8 +139,10 @@ SHARED ARRAY(1..2) OF BALANCE uiuj
 SHARED ARRAY(0..nx,-nz..nz,1..2) OF COMPLEX p=0
 SHARED ARRAY(0..nx,-nz..nz,1..2) OF VELOCITY V=0
 
+#ifdef wholefield
 SHARED ARRAY(-1..ny+1,0..nx,-nz..nz) OF VELOCITY Vtot=0
 SHARED ARRAY(-1..ny+1,0..nx,-nz..nz) OF COMPLEX ptot=0
+#endif
 
 SHARED ARRAY(0..nxd-1,0..nzd-1) OF VELOCITY Vd=0
 SHARED ARRAY(0..nxd-1,0..nzd-1,1..2) OF MOMFLUX VVd=0
