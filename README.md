@@ -21,7 +21,9 @@ The computation is divided in three steps, each of them provided as a separate p
 2) *step2/step2_gke.cpl*: the computation of the GKE terms that do not involve a wall-normal derivatives
 3) *step3/step3_gke.cpl*: the computation of the GKE terms involving wall-normal derivatives
 
-An alternative implementation of the Step 2), which features reduced memory requirement at the cost of more frequent I/O and thus slower computation, is provided in *step2/step2_gke_lowmem.cpl*. 
+The memory requirement of Step 2) can be further reduced by commenting the line  
+```#define wholefiled```  
+of *step2/step2_gke.cpl* (line 17). Doing so will deactivate loading the whole velocity field and only a pair (iy1,iy2) of wall-parallel planes of the velocity field will be loaded at a time. Beware that this increases the I/O and possibly slows down calculations.
 
 ### Contacts
 
