@@ -7,7 +7,7 @@ The database is made up of several VTK files, which can be opened and visualzed 
 
 ``` ReXXX_rx_YYY.vtk ```
 
-where XXX is the value of friction Reynolds number and YYY is the specific value of streamwise separation *rx* in viscous units considered in the file. In fact, each file contains the GKE terms for the three-dimensional space (*Y*,*ry*,*rz*) and *rx* is parametrized amond different files.    
+where XXX is the value of friction Reynolds number and YYY is the specific value of streamwise separation *rx* in viscous units considered in the file. In fact, each file contains the GKE terms for the three-dimensional space (*Y*,*ry*,*rz*) and *rx* is parametrized among different files.    
 
 All quantities are made nondimensional in viscous units, i.e. with the friction velocity and kinematic viscosity of the fluid.   
 If you have question on the database refer to the aformentioned publication, file an issue or contact me at the contact information specified [here](https://github.com/davecats/gke).
