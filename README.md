@@ -25,6 +25,10 @@ The memory requirement of Step 2) can be further reduced by commenting the line
 ```#define wholefiled```  
 of *step2/step2_gke.cpl* (line 17). Doing so will deactivate loading the whole velocity field and only a pair (iy1,iy2) of wall-parallel planes of the velocity field will be loaded at a time. Beware that this increases the I/O and possibly slows down calculations.
 
+### Database
+
+The directory *database* constains the GKE analysis performed for turbulent channels at two different values of friction Reynolds number Retau=200 and Retau=1000. Refer to database/README.md for further information! 
+
 ### Contacts
 
 Dr. Davide Gatti  
