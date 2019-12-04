@@ -6,7 +6,7 @@
 
 This repository is the reference implementation of the GKE described in
 
-``` D. Gatti et al., "An efficient numerical method for the Generalized Kolmogorov Equation", Journal of Turbulence, (submitted, 2018) ```
+``` D. Gatti et al., "An efficient numerical method for the Generalized Kolmogorov Equation", Journal of Turbulence, 20 (8), 457–480, 2018 ```
 
 The code is:
 * *Simple*: it consists of few lines of code 
