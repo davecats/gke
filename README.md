@@ -43,4 +43,4 @@ Kaiserstraße 10
 ### How to cite this code
 
 If you use this code and find it helpful, please cite:  
-``` D. Gatti et al., "An efficient numerical method for the Generalized Kolmogorov Equation", Journal of Turbulence, (submitted, 2018) ```
+``` D. Gatti et al., "An efficient numerical method for the Generalized Kolmogorov Equation", Journal of Turbulence, 20 (8), 457–480, 2018 ```
