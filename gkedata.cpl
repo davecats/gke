@@ -39,13 +39,14 @@
 USE fft
 USE rbmat
 USE parallel
+!USE rtchecks
 
 ! Parameters
 ! -----------------------------
-nsmp=32
-nfmin=20
-nfmax=36
-dn=2
+nsmp=4
+nfmin=1
+nfmax=2
+dn=1
 path="gke.bin"
 uLx1=200.0/1000.0; uLx2=0.5;
 uLz1=200.0/1000.0; uLz2=0.5;
@@ -120,7 +121,7 @@ INTEGER nzd=3*nz - 1; DO INC nzd UNTIL FFTfit(nzd)
 ARRAY(-nz..nz) OF INTEGER izdV=0; DO izdV(iz)=IF iz>=0 THEN iz ELSE nzd+iz FOR iz=-nz TO nz
 nxc=(2*nxd); nzc=nzd; izd==izdV(iz)
 dx=PI/alfa0/nxd; dz=2*PI/beta0/nzd
-IF has_terminal THEN WRITE BY NAME nxc,nzc
+IF has_terminal THEN WRITE BY NAME nxc,nzc,nxd,nzd
 
 ! Types
 ! -------------------------------------------
@@ -190,7 +191,7 @@ POINTER TO STORED ARRAY(0..startpos(ny DIV 2 +1)-1,0..mx-1,0..mz-1) OF GKETERMS 
 
 ! Load MEANTERMS and BALANCE
 ! ------------------------------
-uiujimage=OPEN("uiuj.bin"); WITH uiujimage: mean=meandata; uiuj=uiujdata;
+uiujimage=OPENRO("uiuj.bin"); IF uiujimage#NULL THEN WITH uiujimage: mean=meandata; uiuj=uiujdata; ELSE CLOSE uiujimage END IF
 
 ! Open data for output and set everything to zero
 ! ------------------------------
@@ -242,6 +243,7 @@ SUBROUTINE deriv(ARRAY(*) OF REAL f0,f1^)
   FOR iy=-1 TO ny+1
 END deriv
 
+#ifdef wholefield
 DERIVS = STRUCTURE(COMPLEX ux,uy,uz,vx,vy,vz,wx,wy,wz)
 SUBROUTINE velocity_gradient(POINTER TO ARRAY(*,*,*) OF DERIVS Vder)
   LOOP FOR ix=0 TO nx
@@ -256,5 +258,4 @@ SUBROUTINE velocity_gradient(POINTER TO ARRAY(*,*,*) OF DERIVS Vder)
     REPEAT
   REPEAT
 END velocity_gradient
-
-
+#endif

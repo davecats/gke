@@ -97,7 +97,7 @@ LOOP fields FOR n=nfmin TO nfmax BY dn
   PARALLEL LOOP FOR ismp=0 TO nsmp-1
   LOOP FOR iy=-1 TO ny+1
     LOOP FOR ix=ismp*(nx+1) DIV nsmp TO (ismp+1)*(nx+1) DIV nsmp -1
-      Vderd(ix,0..nz)=Vder(ix,0..nz,iy); Vderd(ix,nz+1..nzd-nz-1)=0; Vderd(ix,nzd+(-nz..-1))=Vder(ix,-nz..-1,iy)
+      DO Vderd(ix,i)=Vder(ix,i,iy); FOR i=0 TO nz Vderd(ix,nz+1..nzd-nz-1)=0; DO Vderd(ix,nzd+i)=Vder(ix,i,iy) FOR i=-nz TO -1
       Vd(ix,0..nz)=Vtot(iy,ix,0..nz);    Vd(ix,nz+1..nzd-nz-1)=0;    Vd(ix,nzd+(-nz..-1))=Vtot(iy,ix,-nz..-1)
       WITH Vderd(ix,*): INLINE LOOP FOR ii IN (ux,vx,wx,uy,vy,wy,uz,vz,wz); IFT(ii); REPEAT
       WITH Vd(ix,*):    INLINE LOOP FOR i  IN (u,v,w); IFT(i); REPEAT
@@ -153,7 +153,7 @@ WITH mketot: deriv(PHIttrsp,ttrsp);
 DO WITH meantot(iy), mketot(iy): PHIvdiff=ni*(U*Uy+W*Wy) FOR ALL iy
 WITH mketot: deriv(PHIvdiff,vdiff);  
 ! pump(MKE)
-WITH mketot,mean: pump=ni*U*0.5*(Uy(0)-Uy(ny))
+WITH mketot,meantot: pump=ni*U*0.5*(Uy(0)-Uy(ny))
 
 ! Write to binary file
 ! ------------------------------------

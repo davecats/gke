@@ -1,0 +1,11 @@
+ny=128 	        nx=12		nz=12
+alfa0=5.2360	beta0=10.4720
+ymin=0		ymax=2 	a=2.1
+ni=200      pr=1.0      gr=1.0
+meanflowx=30.8278	meanpz=0
+u_conv=0.0	w_conv=0.0
+u0=0.0		un=0.0		w0=0.0		wn=0.0  t0=0.0  tn=0.0
+
+deltat=0.00085	t_max=51   time_from_restart=no
+dt_field=0.0051	dt_save=10
+restart_file=./Dati.cart.out
