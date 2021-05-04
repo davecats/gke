@@ -51,7 +51,7 @@
 ! 
 
 USE ../gkedata
-USE wallclock
+USE ../wallclock
 REAL t1,t2,t3,t4
 
 SHARED ARRAY(-1..ny+1,0..mx-1,0..mz-1) OF GKETERMS gke=0

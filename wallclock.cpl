@@ -1,0 +1,11 @@
+REAL FUNCTION wallclock() FOLLOWS
+
+MODULE wallclock
+  struct timeval startim
+  gettimeofday(startim,NULL)
+  REAL FUNCTION wallclock()
+    struct timeval tim
+    gettimeofday(tim,NULL)
+    RESULT=(tim.tv_sec-startim.tv_sec)+1E-6*(tim.tv_usec-startim.tv_usec)
+  END wallclock
+END wallclock

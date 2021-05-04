@@ -41,7 +41,7 @@
 ! 
 
 USE ../gkedata
-USE wallclock
+USE ../wallclock
 REAL t1,t2,t3,t4
 
 ! Compute Derivatives

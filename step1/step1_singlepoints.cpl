@@ -41,8 +41,10 @@ USE ../gkedata
 
 ! Definitions
 ! ------------------------------------
-#define cprod(f,g,h) h.REAL=f.REAL*g.REAL; h.IMAG=f.IMAG*g.IMAG
-#define cprod3(f,g,k,h) h.REAL=f.REAL*g.REAL*k.REAL; h.IMAG=f.IMAG*g.IMAG*k.IMAG
+SUBROUTINE cprod(COMPLEX f,g; POINTER TO COMPLEX h)=h.REAL=f.REAL*g.REAL; h.IMAG=f.IMAG*g.IMAG
+SUBROUTINE cprod3(COMPLEX f,g,k; POINTER TO COMPLEX h)=h.REAL=f.REAL*g.REAL*k.REAL; h.IMAG=f.IMAG*g.IMAG*k.IMAG
+!#define cprod(f,g,h) h.REAL=f.REAL*g.REAL; h.IMAG=f.IMAG*g.IMAG
+!#define cprod3(f,g,k,h) h.REAL=f.REAL*g.REAL*k.REAL; h.IMAG=f.IMAG*g.IMAG*k.IMAG
 
 SHARED ARRAY(0..nx,-nz..nz,-1..ny+1) OF DERIVS Vder=0
 
