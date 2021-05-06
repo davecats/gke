@@ -16,10 +16,14 @@ The code is:
 
 ### Description
 
+The code is written in the programming language CPL, whose compiler can be downloaded [here](https://cplcode.net/).
+
 The computation is divided in three steps, each of them provided as a separate program:
 1) *step1/step1_singlepoints.cpl*: the computation of the single-point budgets of the Reynolds stresses
 2) *step2/step2_gke.cpl*: the computation of the GKE terms that do not involve a wall-normal derivatives
 3) *step3/step3_gke.cpl*: the computation of the GKE terms involving wall-normal derivatives
+
+In the directory *tutorial* you can find the bash script *tutorial/run_tutorial.sh* which will compile the code and run it on simple test data, which correspond to a Minimal Flow Unit (MFU) at a friction Reynolds number of <img src="https://render.githubusercontent.com/render/math?math=Re_\tau=200">. The tutorial requires a working CPL installation and MATLAB, in order to visualise the results. 
 
 The memory requirement of Step 2) can be further reduced by commenting the line  
 ```#define wholefiled```  
