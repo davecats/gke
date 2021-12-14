@@ -1,4 +1,4 @@
-# gke     ![Image of GKE](https://img.shields.io/static/v1?label=CPL&message=Compiler+and+Programming+Language&color=success&style=plastic) 
+# gke    
 
 
 ![Image of GKE](https://github.com/davecats/gke/blob/master/.image.png) 
@@ -11,6 +11,8 @@ The code is:
 * *Simple*: it consists of few lines of code 
 * *Parallel*: with shared and distributed memory parallelization
 * *Efficient*: it leverages Fast Fourier Transform algorithms whenever possible
+
+and written in the  ![programming language CPL](https://img.shields.io/static/v1?label=CPL&message=Compiler+and+Programming+Language&color=success&style=plastic) 
 
 
 ### Description
