@@ -1,5 +1,4 @@
-# gke
-**gke** computes the Generalized Kolmogorov Equation (GKE) for turbulent channels and other plane flows with two directions of statistical homogeneity.  
+# gke     ![Image of GKE](https://img.shields.io/static/v1?label=CPL&message=Compiler+and+Programming+Language&color=success&style=plastic) 
 
 
 ![Image of GKE](https://github.com/davecats/gke/blob/master/.image.png) 
