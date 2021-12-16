@@ -12,7 +12,8 @@ The code is:
 * *Parallel*: with shared and distributed memory parallelization
 * *Efficient*: it leverages Fast Fourier Transform algorithms whenever possible
 
-and written in the  [![programming language CPL](https://img.shields.io/static/v1?label=CPL&message=Compiler+and+Programming+Language&color=success&style=plastic)](https://cplcode.net/)
+and written in the 
+<span itemscope itemtype="http://schema.org/SoftwareApplication http://schema.org/ComputerLanguage"><meta itemprop="name" content="CPL"><meta itemprop="applicationCategory" content="DeveloperApplication"><meta itemprop="applicationSubCategory" content="Programming Language"><meta itemprop="operatingSystem" content="Linux, macOS, Windows Subsystem for Linux"><a itemprop="url" href="https://CPLcode.net" target="_blank" rel="noopener"><img src="https://img.shields.io/static/v1?label=CPL&message=Compiler+and+Programming+Language&color=success&style=plastic" style="vertical-align:middle" alt="CPL Compiler and Programming Language"></a></span>
 
 ### Description
 
