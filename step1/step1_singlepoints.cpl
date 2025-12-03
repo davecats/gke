@@ -103,6 +103,7 @@ LOOP fields FOR n=nfmin TO nfmax BY dn
       WITH Vd(ix,*):    INLINE LOOP FOR i  IN (u,v,w); IFT(i); REPEAT
     REPEAT LOOP
     IF ismp=0 THEN Vd(nx+1..nxd-1)=0; Vderd(nx+1..nxd-1)=0
+    
     SYNC(ismp,nsmp)
     DO
       WITH Vderd(*,iz): INLINE LOOP FOR ii IN (ux,vx,wx,uy,vy,wy,uz,vz,wz); RFT(ii); REPEAT
@@ -133,14 +134,14 @@ LOOP fields FOR n=nfmin TO nfmax BY dn
 REPEAT fields
 
 ! var,PHIttrsp,psdiss,pstrain
-DO WITH uiujtot(iy): var(i)=~/nftot; PHIptrsp(i)=~/nftot; PHIttrsp(i)=~/nftot; psdiss(i)=~/nftot; pstrain(i)=~/nftot FOR ALL i,iy
+DO WITH uiujtot(iy): var(i)=~/nftot; PHIptrsp(i)=~/nftot; PHIttrsp(i)=~/nftot; psdiss(i)=~/nftot; pstrain(i)=~/nftot FOR i=1 TO 6 AND ALL iy
 ! PHIvdiff, vdiff
-DO WITH uiujtot:  deriv(var(*,i),PHIvdiff(*,i)); PHIvdiff(*,i)=~*ni; FOR ALL i;
-DO WITH uiujtot: deriv2(var(*,i),vdiff(*,i));    vdiff(*,i)=~*ni;    FOR ALL i;
+DO WITH uiujtot:  deriv(var(*,i),PHIvdiff(*,i)); PHIvdiff(*,i)=~*ni; FOR i=1 TO 6;
+DO WITH uiujtot: deriv2(var(*,i),vdiff(*,i));    vdiff(*,i)=~*ni;    FOR i=1 TO 6;
 ! ttrsp
-DO WITH uiujtot: deriv(PHIttrsp(*,i),ttrsp(*,i)); FOR ALL i;
+DO WITH uiujtot: deriv(PHIttrsp(*,i),ttrsp(*,i)); FOR i=1 TO 6;
 ! ptrsp
-DO WITH uiujtot: deriv(PHIptrsp(*,i),ptrsp(*,i)); FOR ALL i;
+DO WITH uiujtot: deriv(PHIptrsp(*,i),ptrsp(*,i)); FOR i=1 TO 6;
 ! prod
 DO WITH meantot(iy), uiujtot(iy): prod(1)=-2*var(4)*Uy; prod(3)=-2*var(6)*Wy; prod(4)=-var(2)*Uy; prod(5)=-var(4)*Wy-var(6)*Uy; prod(6)=-var(2)*Wy; FOR ALL iy
 DO WITH meantot(iy), uiujtot(iy), mketot(iy): produv=-0.5*prod(1); prodvw=-0.5*prod(3) FOR ALL iy

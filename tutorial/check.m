@@ -94,3 +94,5 @@ xlabel('r_z')
 ylabel('Y')
 title(labels{k});
 colorbar();
+
+drawnow nocallbacks
