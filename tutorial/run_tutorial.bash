@@ -15,9 +15,9 @@ fi
 bash 2021-11-23-cpl.sh
 
 # Compile all files
-cd ..; cd step1; makecpl -a step1_singlepoints.cpl;
-cd ..; cd step2; makecpl -a step2_gke.cpl; 
-cd ..; cd step3; makecpl -a step3_gke.cpl; 
+cd ..; cd step1; $DIR/fri/makecpl -a step1_singlepoints.cpl;
+cd ..; cd step2; $DIR/fri/makecpl -a step2_gke.cpl; 
+cd ..; cd step3; $DIR/fri/makecpl -a step3_gke.cpl; 
 cd $DIR
 
 # Run the calculation of the GKE
