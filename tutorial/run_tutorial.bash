@@ -1,8 +1,8 @@
 #!/bin/bash
 DIR=`pwd`
 echo
-echo "This will run the tutorial. This will install "
-echo "CPL (v2021-11-23) and requires a working MATLAB installation "
+echo "This will run the tutorial. The tutorial requires "
+echo "a working CPL (v2021-11-23) and MATLAB installation "
 echo 
 read -p "Are you sure (y/n)? " -n 1 -r
 echo    # (optional) move to a new line
@@ -10,9 +10,6 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]
 then
     exit 1
 fi
-
-# Install cpl
-bash 2021-11-23-cpl.sh
 
 # Compile all files
 cd ..; cd step1; $DIR/fri/makecpl -a step1_singlepoints.cpl;
@@ -29,3 +26,4 @@ echo "GKE computation completed!"
 # Visualise the result with matlab
 echo "Visualising example results with MATLAB..."
 matlab -r "run('check.m'); input('Press any key to finish'); exit;" 
+
