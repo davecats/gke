@@ -26,16 +26,6 @@ The computation is divided in three steps, each of them provided as a separate p
 
 In the directory *tutorial* you can find the bash script *tutorial/run_tutorial.bash* which will compile the code and run it on simple test data, which correspond to a Minimal Flow Unit (MFU) at a friction Reynolds number of <img src="https://render.githubusercontent.com/render/math?math=Re_\tau=200">. The tutorial requires a working CPL installation and MATLAB, in order to visualise the results. 
 
-The required CPL compiler environment can be set up and initialised by running:
-```
-cd tutorial
-source init_env.bash
-```
-while the tutorial can be executed by additionally running
-```
-bash run_tutorial.bash
-```
-
 The memory requirement of Step 2) can be further reduced by commenting the line  
 ```#define wholefiled```  
 of *step2/step2_gke.cpl* (line 17). Doing so will deactivate loading the whole velocity field and only a pair (iy1,iy2) of wall-parallel planes of the velocity field will be loaded at a time. Beware that this increases the I/O and possibly slows down calculations.
