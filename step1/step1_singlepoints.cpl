@@ -126,8 +126,8 @@ LOOP fields FOR n=nfmin TO nfmax BY dn
     SYNC(ismp,nsmp)
     IF ismp=0 THEN WITH VVderd(0,0), uiujtot(iy):
       psdiss(1)=~+2*ni*REAL[ux2+uy2+uz2]; psdiss(4)=~+2*ni*REAL[uxvx+uyvy+uzvz]; PHIttrsp(1)=~-PHIttrspd(0,0,1).REAL; PHIttrsp(4)=~-PHIttrspd(0,0,4).REAL
-      psdiss(2)=~+2*ni*REAL[vx2+vy2+vz2]; psdiss(5)=~+2*ni*REAL[uxwx+uywy+uzwz]; PHIttrsp(2)=~-PHIttrspd(0,0,2).REAL; PHIttrsp(4)=~-PHIttrspd(0,0,5).REAL
-      psdiss(3)=~+2*ni*REAL[wx2+wy2+wz2]; psdiss(6)=~+2*ni*REAL[vxwx+vywy+vzwz]; PHIttrsp(3)=~-PHIttrspd(0,0,3).REAL; PHIttrsp(4)=~-PHIttrspd(0,0,6).REAL
+      psdiss(2)=~+2*ni*REAL[vx2+vy2+vz2]; psdiss(5)=~+2*ni*REAL[uxwx+uywy+uzwz]; PHIttrsp(2)=~-PHIttrspd(0,0,2).REAL; PHIttrsp(5)=~-PHIttrspd(0,0,5).REAL
+      psdiss(3)=~+2*ni*REAL[wx2+wy2+wz2]; psdiss(6)=~+2*ni*REAL[vxwx+vywy+vzwz]; PHIttrsp(3)=~-PHIttrspd(0,0,3).REAL; PHIttrsp(6)=~-PHIttrspd(0,0,6).REAL
     END IF
   REPEAT LOOP
   REPEAT LOOP
