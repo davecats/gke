@@ -1,0 +1,209 @@
+!
+! This program computes and stores the single-point budgets of the Reynolds
+! stress tensor. Some terms are used to compute the Generalized Kolmogorov Equation (GKE)
+!
+! This is the physical-space implementation: the mean profiles, variances,
+! pressure terms, pseudo-dissipation and triple correlations are accumulated
+! point by point on the physical grid (0..2*nxd-1)x(0..nzd-1), instead of over
+! the Fourier coefficients as in step1_singlepoints_fourier.cpl. The velocity
+! gradient itself is still computed spectrally; only the statistics are
+! accumulated in physical space. For single-phase flows the results of the two
+! implementations are identical up to round-off, but this one is slower.
+! Its purpose is masked statistics, e.g. for particle-laden flows: for each
+! snapshot "Dati.cart.<n>.fld" an optional indicator field "mask.<n>.fld" is
+! read if present
+! [STORED ARRAY(-1..ny+1,0..2*nxd-1,0..nzd-1) OF REAL; 1.0=fluid, 0.0=solid].
+! Points inside a particle are skipped and every average is renormalized by
+! the number of accumulated fluid points; without a mask file all points are
+! fluid, which reproduces the unmasked results exactly.
+!
+! ------------------------------------------------------------------------------
+! If you use this code and find it helpful please cite
+!
+! D. Gatti et al., "An efficient numerical method for the Generalized Kolmogorov
+! Equation", Journal of Turbulence, (submitted, 2018)
+! ------------------------------------------------------------------------------
+!
+! Copyright (C) 2018  Dr. Davide Gatti
+!
+! This program is free software: you can redistribute it and/or modify
+! it under the terms of the GNU General Public License as published by
+! the Free Software Foundation, either version 3 of the License, or
+! any later version.
+!
+! This program is distributed in the hope that it will be useful,
+! but WITHOUT ANY WARRANTY; without even the implied warranty of
+! MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+! GNU General Public License for more details.
+!
+! You should have received a copy of the GNU General Public License
+! along with this program.  If not, see <https://www.gnu.org/licenses/>.
+!
+! Contacts:
+!
+! Dr. Davide Gatti
+! davide.gatti [at] kit.edu
+! msc.davide.gatti [at] gmail.com
+!
+! Karlsruhe Institute of Technology
+! Institute of Fluid Dynamics
+! Kaiserstraße 10
+! 76131 Karlsruhe
+!
+
+#define wholefield
+#define physicalspace
+USE ../gkedata
+
+! Definitions
+! ------------------------------------
+SHARED ARRAY(0..nx,-nz..nz,-1..ny+1) OF DERIVS Vder=0
+
+SHARED ARRAY(-1..ny+1) OF MEANTERMS meantot=0
+SHARED ARRAY(-1..ny+1) OF BALANCE uiujtot=0
+SHARED ARRAY(-1..ny+1) OF MKETERMS mketot=0
+
+! Physical-space fields of one wall-parallel plane
+S1PLANE = STRUCTURE(REAL u,v,w,pf,ux,uy,uz,vx,vy,vz,wx,wy,wz)
+SHARED ARRAY(0..2*nxd-1,0..nzd-1) OF S1PLANE PH1=0
+
+! Accumulators (used by ismp=0 only)
+INTEGER npoint
+REAL cn,sU,sW,sP,spu,spv,spw
+ARRAY(1..6) OF REAL svar=0,spst=0,spsd=0,sttr=0
+S1PLANE q
+
+! Transform to physical space the fields needed for the mean profiles
+SUBROUTINE preparemeanphys(INTEGER iy)
+  tophys(Vtot(iy,*,*).u,0,PH1(*,*).u); tophys(Vtot(iy,*,*).w,0,PH1(*,*).w)
+  tophys(ptot(iy,*,*),0,PH1(*,*).pf)
+END preparemeanphys
+
+! Transform to physical space all fields needed for the budgets
+SUBROUTINE preparefullphys(INTEGER iy)
+  tophys(Vtot(iy,*,*).u,0,PH1(*,*).u); tophys(Vtot(iy,*,*).v,0,PH1(*,*).v); tophys(Vtot(iy,*,*).w,0,PH1(*,*).w)
+  tophys(ptot(iy,*,*),0,PH1(*,*).pf)
+  tophys(Vder(*,*,iy).ux,0,PH1(*,*).ux); tophys(Vder(*,*,iy).uy,0,PH1(*,*).uy); tophys(Vder(*,*,iy).uz,0,PH1(*,*).uz)
+  tophys(Vder(*,*,iy).vx,0,PH1(*,*).vx); tophys(Vder(*,*,iy).vy,0,PH1(*,*).vy); tophys(Vder(*,*,iy).vz,0,PH1(*,*).vz)
+  tophys(Vder(*,*,iy).wx,0,PH1(*,*).wx); tophys(Vder(*,*,iy).wy,0,PH1(*,*).wy); tophys(Vder(*,*,iy).wz,0,PH1(*,*).wz)
+END preparefullphys
+
+! Compute the average field
+! ------------------------------------
+LOOP files FOR n=nfmin TO nfmax BY dn
+  STRING field_name = WRITE("Dati.cart."n".fld"); diskimage = OPEN(field_name); Vtot=diskimage.Vimage; CLOSE diskimage
+  STRING pressure_name = WRITE('pField'n'.fld');  pressuredata=OPEN(pressure_name); ptot=pressuredata; CLOSE pressuredata
+  STRING mask_name = WRITE("mask."n".fld"); maskimage=OPENRO(mask_name)
+  IF maskimage=NULL THEN DO gmask(ix,iz,i)=1 FOR ALL ix,iz,i
+  PARALLEL LOOP FOR ismp=0 TO nsmp-1
+    LOOP FOR iy=-1 TO ny+1
+      IF ismp=0 AND maskimage#NULL THEN gmask(*,*,1)=maskimage(iy,*,*)
+      preparemeanphys(iy)
+      IF ismp=0 THEN
+        npoint=0; sU=0; sW=0; sP=0
+        LOOP FOR ix=0 TO 2*nxd-1 AND iz=0 TO nzd-1
+          IF gmask(ix,iz,1)>0.5 THEN
+            q=PH1(ix,iz); sU=~+q.u; sW=~+q.w; sP=~+q.pf; INC npoint
+          END IF
+        REPEAT
+        IF npoint>0 THEN
+          cn=1.0/npoint
+          WITH meantot(iy): U=~+sU*cn; W=~+sW*cn; P=~+sP*cn
+        END IF
+      END IF
+    REPEAT
+  REPEAT
+  IF maskimage#NULL THEN CLOSE(maskimage)
+REPEAT files
+WITH meantot: U=~/nftot; W=~/nftot; P=~/nftot
+WITH meantot:  deriv(U, Uy);  deriv(W, Wy);
+WITH meantot: deriv2(U, Uyy); deriv2(W, Wyy);
+
+! Compute the TKE budget
+! ------------------------------------
+LOOP fields FOR n=nfmin TO nfmax BY dn
+  ! Read field
+  STRING field_name = WRITE("Dati.cart."n".fld"); diskimage = OPEN(field_name); Vtot=diskimage.Vimage; CLOSE diskimage
+  STRING pressure_name = WRITE('pField'n'.fld');  pressuredata=OPEN(pressure_name); ptot=pressuredata; CLOSE pressuredata
+  STRING mask_name = WRITE("mask."n".fld"); maskimage=OPENRO(mask_name)
+  IF maskimage=NULL THEN DO gmask(ix,iz,i)=1 FOR ALL ix,iz,i
+  ! Compute fluctuating field
+  WITH meantot(*),Vtot(*,0,0): u.REAL=~-U; w.REAL=~-W; ptot(*,0,0)=~-P;
+  ! Compute derivatives (spectrally)
+  velocity_gradient(Vder)
+  ! Point-by-point accumulation of the statistics in physical space; points
+  ! inside a particle are skipped and the averages are renormalized by the
+  ! number npoint of accumulated fluid points.
+  PARALLEL LOOP FOR ismp=0 TO nsmp-1
+    LOOP FOR iy=-1 TO ny+1
+      IF ismp=0 AND maskimage#NULL THEN gmask(*,*,1)=maskimage(iy,*,*)
+      preparefullphys(iy)
+      IF ismp=0 THEN
+        npoint=0; svar=0; spst=0; spsd=0; sttr=0; spu=0; spv=0; spw=0
+        LOOP FOR ix=0 TO 2*nxd-1 AND iz=0 TO nzd-1
+          IF gmask(ix,iz,1)>0.5 THEN
+            q=PH1(ix,iz)
+            svar(1)=~+q.u*q.u; svar(2)=~+q.v*q.v; svar(3)=~+q.w*q.w
+            svar(4)=~+q.u*q.v; svar(5)=~+q.u*q.w; svar(6)=~+q.v*q.w
+            spu=~+q.u*q.pf; spv=~+q.v*q.pf; spw=~+q.w*q.pf
+            spst(1)=~+2*q.ux*q.pf; spst(2)=~+2*q.vy*q.pf; spst(3)=~+2*q.wz*q.pf
+            spst(4)=~+[q.uy+q.vx]*q.pf; spst(5)=~+[q.uz+q.wx]*q.pf; spst(6)=~+[q.vz+q.wy]*q.pf
+            spsd(1)=~+q.ux*q.ux+q.uy*q.uy+q.uz*q.uz
+            spsd(2)=~+q.vx*q.vx+q.vy*q.vy+q.vz*q.vz
+            spsd(3)=~+q.wx*q.wx+q.wy*q.wy+q.wz*q.wz
+            spsd(4)=~+q.ux*q.vx+q.uy*q.vy+q.uz*q.vz
+            spsd(5)=~+q.ux*q.wx+q.uy*q.wy+q.uz*q.wz
+            spsd(6)=~+q.vx*q.wx+q.vy*q.wy+q.vz*q.wz
+            sttr(1)=~+q.v*q.u*q.u; sttr(2)=~+q.v*q.v*q.v; sttr(3)=~+q.v*q.w*q.w
+            sttr(4)=~+q.u*q.v*q.v; sttr(5)=~+q.u*q.v*q.w; sttr(6)=~+q.v*q.v*q.w
+            INC npoint
+          END IF
+        REPEAT
+        IF npoint>0 THEN
+          cn=1.0/npoint
+          DO WITH uiujtot(iy):
+            var(i)=~+svar(i)*cn; pstrain(i)=~+spst(i)*cn; psdiss(i)=~+2*ni*spsd(i)*cn; PHIttrsp(i)=~-sttr(i)*cn
+          FOR i=1 TO 6
+          WITH uiujtot(iy): PHIptrsp(2)=~-2*spv*cn; PHIptrsp(4)=~-spu*cn; PHIptrsp(6)=~-spw*cn
+        END IF
+      END IF
+    REPEAT
+  REPEAT
+  IF maskimage#NULL THEN CLOSE(maskimage)
+REPEAT fields
+
+! var,PHIttrsp,psdiss,pstrain
+DO WITH uiujtot(iy): var(i)=~/nftot; PHIptrsp(i)=~/nftot; PHIttrsp(i)=~/nftot; psdiss(i)=~/nftot; pstrain(i)=~/nftot FOR i=1 TO 6 AND ALL iy
+! PHIvdiff, vdiff
+DO WITH uiujtot:  deriv(var(*,i),PHIvdiff(*,i)); PHIvdiff(*,i)=~*ni; FOR i=1 TO 6;
+DO WITH uiujtot: deriv2(var(*,i),vdiff(*,i));    vdiff(*,i)=~*ni;    FOR i=1 TO 6;
+! ttrsp
+DO WITH uiujtot: deriv(PHIttrsp(*,i),ttrsp(*,i)); FOR i=1 TO 6;
+! ptrsp
+DO WITH uiujtot: deriv(PHIptrsp(*,i),ptrsp(*,i)); FOR i=1 TO 6;
+! prod
+DO WITH meantot(iy), uiujtot(iy): prod(1)=-2*var(4)*Uy; prod(3)=-2*var(6)*Wy; prod(4)=-var(2)*Uy; prod(5)=-var(4)*Wy-var(6)*Uy; prod(6)=-var(2)*Wy; FOR ALL iy
+DO WITH meantot(iy), uiujtot(iy), mketot(iy): produv=-0.5*prod(1); prodvw=-0.5*prod(3) FOR ALL iy
+! dissU(MKE) and dissW(MKE)
+DO WITH meantot(iy), mketot(iy): dissU=ni*Uy^2; dissW=ni*Wy^2 FOR ALL iy
+! ttrsp(MKE)
+DO WITH meantot(iy), uiujtot(iy), mketot(iy): mketot(iy).PHIttrsp=-var(4)*U-var(6)*W FOR ALL iy
+WITH mketot: deriv(PHIttrsp,ttrsp);
+! vdiff(MKE)
+DO WITH meantot(iy), mketot(iy): PHIvdiff=ni*(U*Uy+W*Wy) FOR ALL iy
+WITH mketot: deriv(PHIvdiff,vdiff);
+! pump(MKE)
+WITH mketot,meantot: pump=ni*U*0.5*(Uy(0)-Uy(ny))
+
+! Write to binary file
+! ------------------------------------
+uiujimage = OPEN("uiuj.bin")
+WITH uiujimage:
+    meandata(-1..ny+1)=meantot(-1..ny+1)
+    mkedata(-1..ny+1)=mketot(-1..ny+1)
+    uiujdata(-1..ny+1)=uiujtot(-1..ny+1)
+CLOSE(uiujimage)
+
+! Be polite and say goodbye
+! ------------------------------------
+IF has_terminal THEN WRITE "Finished!"

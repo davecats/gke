@@ -20,21 +20,21 @@ and written in the
 The code is written in the programming language CPL, whose compiler can be downloaded [here](https://cplcode.net/).
 
 The computation is divided in three steps, each of them provided as a separate program:
-1) *step1/step1_singlepoints.cpl*: the computation of the single-point budgets of the Reynolds stresses
-2) *step2/step2_gke.cpl*: the computation of the GKE terms that do not involve a wall-normal derivatives
+1) *step1/step1_singlepoints_fourier.cpl*: the computation of the single-point budgets of the Reynolds stresses
+2) *step2/step2_gke_fourier.cpl*: the computation of the GKE terms that do not involve a wall-normal derivatives
 3) *step3/step3_gke.cpl*: the computation of the GKE terms involving wall-normal derivatives
+
+Steps 1) and 2) exist in two interchangeable variants: the pseudo-spectral one (*_fourier.cpl*, the default and fastest, which evaluates the statistics with Parseval's theorem and the convolution theorem) and a physical-space one (*_physical.cpl*, slower, which accumulates the same statistics point by point and supports particle masking, see below). For single-phase flows the two variants produce identical results up to round-off.
 
 In the directory *tutorial* you can find the bash script *tutorial/run_tutorial.bash* which will compile the code and run it on simple test data, which correspond to a Minimal Flow Unit (MFU) at a friction Reynolds number of $Re_\tau=200$. The tutorial requires a working CPL installation and MATLAB, in order to visualise the results. 
 
 The memory requirement of Step 2) can be further reduced by commenting the line  
 ```#define wholefiled```  
-of *step2/step2_gke.cpl* (line 17). Doing so will deactivate loading the whole velocity field and only a pair (iy1,iy2) of wall-parallel planes of the velocity field will be loaded at a time. Beware that this increases the I/O and possibly slows down calculations.
+of *step2/step2_gke_fourier.cpl* (or *step2/step2_gke_physical.cpl*). Doing so will deactivate loading the whole velocity field and only a pair (iy1,iy2) of wall-parallel planes of the velocity field will be loaded at a time. Beware that this increases the I/O and possibly slows down calculations.
 
 ### Physical-space statistics and particle masking
 
-By default Step 2) evaluates the two-point statistics pseudo-spectrally, via the convolution theorem. Uncommenting the line  
-```#define physicalspace```  
-of *step2/step2_gke.cpl* switches to a direct accumulation of the statistics over pairs of points in physical space. For single-phase flows the results are identical up to round-off, but the computation is slower. Its purpose is masked statistics, e.g. for particle-laden flows: for each snapshot *Dati.cart.〈n〉.fld* an optional indicator field *mask.〈n〉.fld* is read if present, a `STORED ARRAY(-1..ny+1, 0..2*nxd-1, 0..nzd-1) OF REAL` (i.e. double precision, C-ordered, on the fine physical grid nxc × nzc printed at startup) with 1.0 marking fluid points and 0.0 solid points. Point pairs with at least one point inside the solid phase are skipped, and every average is renormalized by the number of accumulated pairs of that snapshot. Without a mask file all points are treated as fluid, which reproduces the unmasked results exactly.
+The programs *step1/step1_singlepoints_physical.cpl* and *step2/step2_gke_physical.cpl* accumulate the statistics point by point (step 1) and over pairs of points (step 2) in physical space, instead of using Parseval's theorem and the convolution theorem. For single-phase flows the results are identical (to round-off) to those of the *_fourier* programs, but the computation is slower. Their purpose is masked statistics, e.g. for particle-laden flows: for each snapshot *Dati.cart.〈n〉.fld* an optional mask file *mask.〈n〉.fld* is read if present, a `STORED ARRAY(-1..ny+1, 0..2*nxd-1, 0..nzd-1) OF REAL` (i.e. double precision, C-ordered, on the fine physical grid nxc × nzc printed at startup) with 1.0 marking fluid points and 0.0 solid points. Points (step 1) and point pairs (step 2) with at least one point inside the solid phase are skipped, and every average is renormalized by the number of accumulated points or pairs. If no mask file exists all points are treated as fluid. In step 1 the velocity gradient is still computed spectrally from the global field; only the accumulation of the statistics is performed in physical space.
 
 ### Database
 

@@ -1,7 +1,15 @@
-! 
-! This program computes and stores the single-point budgets of the Reynolds 
+!
+! This program computes and stores the single-point budgets of the Reynolds
 ! stress tensor. Some terms are used to compute the Generalized Kolmogorov Equation (GKE)
-! 
+!
+! This is the pseudo-spectral (Fourier) implementation: the statistics are
+! accumulated over the Fourier coefficients (Parseval) or on the dealiased
+! grid via FFTs. It is the fastest option and the recommended one for
+! single-phase flows. The alternative implementation
+! step1_singlepoints_physical.cpl accumulates the same statistics point by
+! point in physical space: it produces identical results (up to round-off),
+! is slower, but supports masking of points inside particles.
+!
 ! ------------------------------------------------------------------------------
 ! If you use this code and find it helpful please cite
 ! 
