@@ -57,7 +57,12 @@ REAL t1,t2,t3,t4
 SHARED ARRAY(-1..ny+1,0..mx-1,0..mz-1) OF GKETERMS gke=0
 SHARED ARRAY(1..2,1..2,0..nxd-1,0..nzd-1) OF STRUCTURE(COMPLEX UU,VV,WW,UV,PV,uuu,uuv,uuw,vvu,vvv,vvw,wwu,wwv,www,uvu,uvv,uwu,uww,vwv,vww) R=0
 #define pR(A,f) A(*,iz).f.REALIFIED(ix)
-#define mR(A,f) A(*,(nzd-iz) MOD nzd).f.REALIFIED((2*nxd-ix) MOD (2*nxd))
+! NOTE: the x-mirror index must use the single identifier nxc (=2*nxd) as the
+! right operand of MOD: with a parenthesized product, i.e. MOD (2*nxd), the
+! CPL compiler emits the C expression "% 2*nxd" inside the REALIFIED argument,
+! which C parses as "(... % 2)*nxd" and silently samples rx=0 or rx=nxd
+! instead of the mirrored separation.
+#define mR(A,f) A(*,(nzd-iz) MOD nzd).f.REALIFIED((nxc-ix) MOD nxc)
 #define R0(A,f) A(*,0).f.REALIFIED(0)
 ! Compute Kolmogorov Equation
 ! -------------------------------
