@@ -30,6 +30,12 @@ The memory requirement of Step 2) can be further reduced by commenting the line
 ```#define wholefiled```  
 of *step2/step2_gke.cpl* (line 17). Doing so will deactivate loading the whole velocity field and only a pair (iy1,iy2) of wall-parallel planes of the velocity field will be loaded at a time. Beware that this increases the I/O and possibly slows down calculations.
 
+### Physical-space statistics and particle masking
+
+By default Step 2) evaluates the two-point statistics pseudo-spectrally, via the convolution theorem. Uncommenting the line  
+```#define physicalspace```  
+of *step2/step2_gke.cpl* switches to a direct accumulation of the statistics over pairs of points in physical space. For single-phase flows the results are identical up to round-off, but the computation is slower. Its purpose is masked statistics, e.g. for particle-laden flows: for each snapshot *Dati.cart.〈n〉.fld* an optional indicator field *mask.〈n〉.fld* is read if present, a `STORED ARRAY(-1..ny+1, 0..2*nxd-1, 0..nzd-1) OF REAL` (i.e. double precision, C-ordered, on the fine physical grid nxc × nzc printed at startup) with 1.0 marking fluid points and 0.0 solid points. Point pairs with at least one point inside the solid phase are skipped, and every average is renormalized by the number of accumulated pairs of that snapshot. Without a mask file all points are treated as fluid, which reproduces the unmasked results exactly.
+
 ### Database
 
 The directory *database* constains the GKE analysis performed for turbulent channels at two different values of friction Reynolds number Retau=200 and Retau=1000. Refer to database/README.md for further information! 

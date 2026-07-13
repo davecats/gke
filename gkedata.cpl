@@ -227,7 +227,51 @@ SUBROUTINE convolutions(ARRAY(*,*) OF VELOCITY Vplane; POINTER TO ARRAY(*,*) OF 
   FOR ix=ismp*(nx+1) DIV nsmp TO (ismp+1)*(nx+1) DIV nsmp -1
 END convolutions
 
-! Subroutines for derivatives and velocity gradient 
+! Physical-space two-point statistics (optional, see step2_gke.cpl)
+! -----------------------------------------------------------------
+! When "physicalspace" is defined, step 2 accumulates the two-point products
+! directly over pairs of points of the physical-space grid
+! (0..2*nxd-1)x(0..nzd-1) instead of using the convolution theorem. For each
+! snapshot "Dati.cart.<n>.fld" an optional indicator field "mask.<n>.fld"
+! [STORED ARRAY(-1..ny+1,0..2*nxd-1,0..nzd-1) OF REAL; 1.0=fluid, 0.0=solid]
+! is read if present: pairs with at least one point inside a particle are then
+! skipped and averages are renormalized by the number of accumulated pairs.
+! Without a mask file all points are fluid and results equal the Fourier path.
+#ifdef physicalspace
+PHYSPLANE = STRUCTURE(REAL u,v,w,pf,ux,vx,wx,uz,vz,wz)
+SHARED ARRAY(0..2*nxd-1,0..nzd-1,1..2) OF PHYSPLANE PH=0
+SHARED ARRAY(0..2*nxd-1,0..nzd-1,1..2) OF REAL gmask=0
+DO gmask(ix,iz,i)=1 FOR ALL ix,iz,i
+SHARED ARRAY(0..nxd-1,0..nzd-1) OF COMPLEX scrp=0
+POINTER TO STORED ARRAY(-1..ny+1,0..2*nxd-1,0..nzd-1) OF REAL maskimage
+
+! Transform one spectral plane f to physical space into g
+! m=0: value; m=1: x-derivative; m=2: z-derivative
+SUBROUTINE tophys(ARRAY(*,*) OF COMPLEX f; INTEGER m; POINTER TO ARRAY(*,*) OF REAL g)
+  LOOP FOR ix=ismp*(nx+1) DIV nsmp TO (ismp+1)*(nx+1) DIV nsmp -1
+    DO scrp(ix,izdV(iz))=[IF m=1 THEN I*alfa0*ix*f(ix,iz) ELSE IF m=2 THEN I*beta0*iz*f(ix,iz) ELSE f(ix,iz)] FOR iz=-nz TO nz
+    scrp(ix,nz+1..nzd-nz-1)=0
+    IFT(scrp(ix,*))
+  REPEAT LOOP
+  IF ismp=0 THEN scrp(nx+1..nxd-1)=0
+  SYNC(ismp,nsmp)
+  DO
+    RFT(scrp(*,iz))
+    DO g(ix,iz)=scrp(*,iz).REALIFIED(ix) FOR ix=0 TO 2*nxd-1
+  FOR iz=ismp*nzd DIV nsmp TO (ismp+1)*nzd DIV nsmp -1
+  SYNC(ismp,nsmp)
+END tophys
+
+! Prepare all physical fields of plane i (fluctuations and x/z derivatives)
+SUBROUTINE preparephys(INTEGER i)
+  tophys(V(*,*,i).u,0,PH(*,*,i).u); tophys(V(*,*,i).u,1,PH(*,*,i).ux); tophys(V(*,*,i).u,2,PH(*,*,i).uz)
+  tophys(V(*,*,i).v,0,PH(*,*,i).v); tophys(V(*,*,i).v,1,PH(*,*,i).vx); tophys(V(*,*,i).v,2,PH(*,*,i).vz)
+  tophys(V(*,*,i).w,0,PH(*,*,i).w); tophys(V(*,*,i).w,1,PH(*,*,i).wx); tophys(V(*,*,i).w,2,PH(*,*,i).wz)
+  tophys(p(*,*,i),0,PH(*,*,i).pf)
+END preparephys
+#endif
+
+! Subroutines for derivatives and velocity gradient
 ! -------------------------------------------------
 SUBROUTINE deriv2(ARRAY(*) OF REAL f0,f2^)
   DO 

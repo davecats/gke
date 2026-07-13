@@ -15,7 +15,22 @@
 ! and supposedly slows down calculations
 ! 
 #define wholefield
-! 
+!
+! ------------------------------------------------------------------------------
+!
+! Uncomment "#define physicalspace" to accumulate the two-point statistics
+! directly over pairs of points in physical space instead of using the
+! convolution theorem. This is slower, but the results are identical (up to
+! round-off) for single-phase flows, and point pairs can be masked, e.g. for
+! particle-laden flows: for each snapshot "Dati.cart.<n>.fld" an optional
+! indicator field "mask.<n>.fld" is read if present
+! [STORED ARRAY(-1..ny+1,0..2*nxd-1,0..nzd-1) OF REAL; 1.0=fluid, 0.0=solid].
+! Pairs with at least one point inside a particle are skipped and averages are
+! renormalized by the number of accumulated pairs; without a mask file all
+! points are fluid.
+!
+!#define physicalspace
+!
 ! ------------------------------------------------------------------------------
 ! If you use this code and find it helpful please cite
 ! 
@@ -55,7 +70,14 @@ USE ../wallclock
 REAL t1,t2,t3,t4
 
 SHARED ARRAY(-1..ny+1,0..mx-1,0..mz-1) OF GKETERMS gke=0
+#ifdef physicalspace
+INTEGER rx,rz,ix2,iz2,npair
+REAL du,dv,dw,dpp,vs,e2,cn
+REAL sSE,sFX,sFY,sFZ,sFC,sUV,sUVS,sGX,sGZ
+PHYSPLANE P1,P2
+#else
 SHARED ARRAY(1..2,1..2,0..nxd-1,0..nzd-1) OF STRUCTURE(COMPLEX UU,VV,WW,UV,PV,uuu,uuv,uuw,vvu,vvv,vvw,wwu,wwv,www,uvu,uvv,uwu,uww,vwv,vww) R=0
+#endif
 #define pR(A,f) A(*,iz).f.REALIFIED(ix)
 ! NOTE: the x-mirror index must use the single identifier nxc (=2*nxd) as the
 ! right operand of MOD: with a parenthesized product, i.e. MOD (2*nxd), the
@@ -71,6 +93,10 @@ LOOP files FOR if=nfmin TO nfmax BY dn
  ! Open V and P fields
  STRING field_name = WRITE("Dati.cart."if".fld"); diskimage = OPEN(field_name);
  STRING pressure_name = WRITE('pField'if'.fld');  pressuredata=OPEN(pressure_name);
+#ifdef physicalspace
+ STRING mask_name = WRITE("mask."if".fld"); maskimage=OPENRO(mask_name)
+ IF maskimage=NULL THEN DO gmask(ix,iz,i)=1 FOR ALL ix,iz,i
+#endif
 #ifdef wholefield
  WRITE "iproc=",iproc, "   ","Reading data..."; t1=wallclock();
   Vtot=diskimage.Vimage; CLOSE diskimage
@@ -95,8 +121,15 @@ LOOP files FOR if=nfmin TO nfmax BY dn
 #endif
         ! Remove mean
         WITH mean(1),V(0,0,1): u.REAL=~-U; w.REAL=~-W; p(0,0,1)=~-P;
+#ifdef physicalspace
+        IF maskimage#NULL THEN gmask(*,*,1)=maskimage(iy1,*,*)
+#endif
         PARALLEL LOOP FOR ismp=0 TO nsmp-1
+#ifdef physicalspace
+          preparephys(1)
+#else
           convolutions(V(*,*,1),VVd(*,*,1))
+#endif
           LOOP inner FOR IY2=IY1 TO ny-IY1
             iy2 = IF sig=1  THEN IY2 ELSE ny-IY2
             ! Open V and p field, remove mean
@@ -108,8 +141,53 @@ LOOP files FOR if=nfmin TO nfmax BY dn
               bufp = pressuredata(iy2,*,*);     p(*,*,2)=bufp; uiuj(2)=uiujimage.uiujdata(iy2);
 #endif
               WITH mean(2),V(0,0,2): u.REAL=~-U; w.REAL=~-W; p(0,0,2)=~-P;
+#ifdef physicalspace
+              IF maskimage#NULL THEN gmask(*,*,2)=maskimage(iy2,*,*)
+#endif
             END IF
             SYNC(ismp,nsmp)
+#ifdef physicalspace
+            ! Direct accumulation of the two-point statistics over pairs of
+            ! points (x, x+r) of the physical grid; pairs with at least one
+            ! point inside a particle are skipped and the averages are
+            ! renormalized by the number npair of accumulated pairs.
+            preparephys(2)
+            LOOP FOR jx=ismp*mx DIV nsmp TO (ismp+1)*mx DIV nsmp -1
+              rx=imx(jx)
+              LOOP FOR jz=0 TO mz-1
+                rz=imz(jz)
+                npair=0; sSE=0; sFX=0; sFY=0; sFZ=0; sFC=0; sUV=0; sUVS=0; sGX=0; sGZ=0
+                LOOP FOR ix=0 TO 2*nxd-1
+                  ix2=(ix+rx) MOD nxc
+                  LOOP FOR iz=0 TO nzd-1
+                    iz2=(iz+rz) MOD nzd
+                    IF gmask(ix,iz,1)>0.5 AND gmask(ix2,iz2,2)>0.5 THEN
+                      P1=PH(ix,iz,1); P2=PH(ix2,iz2,2)
+                      du=P2.u-P1.u; dv=P2.v-P1.v; dw=P2.w-P1.w
+                      dpp=P2.pf-P1.pf; vs=P1.v+P2.v
+                      e2=du*du+dv*dv+dw*dw
+                      sSE=~+e2; sFX=~+e2*du; sFY=~+e2*dv; sFZ=~+e2*dw
+                      sFC=~+0.5*vs*e2+2*dpp*dv
+                      sUV=~+du*dv; sUVS=~+du*vs
+                      sGX=~+du*(P1.ux+P2.ux)+dv*(P1.vx+P2.vx)+dw*(P1.wx+P2.wx)
+                      sGZ=~+du*(P1.uz+P2.uz)+dv*(P1.vz+P2.vz)+dw*(P1.wz+P2.wz)
+                      INC npair
+                    END IF
+                  REPEAT
+                REPEAT
+                IF npair>0 THEN
+                  cn=1.0/npair; iscaleENER=sSE*cn
+                  gke(IY2,jx,jz).scaleENER=~+iscaleENER
+                  gke(IY2,jx,jz).phiR(1)=~+sFX*cn+iscaleENER*[mean(2).U-mean(1).U]-2*ni*sGX*cn
+                  gke(IY2,jx,jz).phiR(2)=~+sig*sFY*cn
+                  gke(IY2,jx,jz).phiR(3)=~+sFZ*cn+iscaleENER*[mean(2).W-mean(1).W]-2*ni*sGZ*cn
+                  gke(IY2,jx,jz).phiC=~+sig*[sFC*cn]
+                  gke(IY2,jx,jz).scalePROD=~-[sUV*cn]*[mean(1).Uy+mean(2).Uy]-[sUVS*cn]*[mean(2).Uy-mean(1).Uy]-[SUM uiuj(1).psdiss(i)+uiuj(2).psdiss(i) FOR i=1 TO 3]
+                END IF
+              REPEAT
+            REPEAT
+            SYNC(ismp,nsmp)
+#else
             convolutions(V(*,*,2),VVd(*,*,2));
             LOOP FOR i1=1 TO 2 AND i2=1 TO 2
               LOOP FOR ix=ismp*(nx+1) DIV nsmp TO (ismp+1)*(nx+1) DIV nsmp -1
@@ -163,6 +241,7 @@ LOOP files FOR if=nfmin TO nfmax BY dn
               DO WITH gke(IY2,ix,iz): phiR(1) = ~-2*ni*Vd(*,imz(iz)).u.REALIFIED(imx(ix)); phiR(3) = ~-2*ni*Vd(*,imz(iz)).w.REALIFIED(imx(ix)) FOR iz=0 TO mz-1
             FOR ix=ismp*mx DIV nsmp TO (ismp+1)*mx DIV nsmp -1
             SYNC(ismp,nsmp)
+#endif
           REPEAT inner
         REPEAT
      REPEAT
@@ -173,6 +252,9 @@ LOOP files FOR if=nfmin TO nfmax BY dn
      gkedata(startpos(IY1)+(0..ny-2*IY1),*,*)=gke(IY1+(0..ny-2*IY1),*,*); t4=wallclock();
      WRITE "iproc=",iproc,"   ", "   ", "   ", "Writing took ", t4-t3, " seconds"
   REPEAT outer
+#ifdef physicalspace
+  IF maskimage#NULL THEN CLOSE(maskimage)
+#endif
   CLOSE(diskimage)
   CLOSE(pressuredata)
 REPEAT files
