@@ -3,3 +3,15 @@
 *.air
 *.ipa
 *.apk
+
+# CPL intermediate C files and objects
+.cpl/
+
+# Compiled CPL programs
+step1/step1_singlepoints
+step2/step2_gke
+step3/step3_gke
+
+# Tutorial output data
+tutorial/gke.bin
+tutorial/uiuj.bin

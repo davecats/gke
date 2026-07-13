@@ -36,7 +36,7 @@
 ! 76131 Karlsruhe 
 ! 
 
-USE fft
+USE fftw
 USE rbmat
 USE parallel
 !USE rtchecks

@@ -1,0 +1,221 @@
+! FFTW3-based drop-in replacement for the CPL fft library.           !
+! Provides the same interface and transform conventions as fft.cpl / !
+! fft.cmn (documented in fft.info), backed by FFTW3 (www.fftw.org).  !
+!                                                                     !
+! Notes:                                                              !
+! - Arrays are assumed to be 0-based (0..N-1 or 0..N), as implicitly  !
+!   required by the original fft library too.                         !
+! - The U (unordered) variants are mapped to the ordered transforms:  !
+!   FFTW gains nothing from leaving the output unordered, and the     !
+!   pairs (IFTU,FFTU) and (RFTU,HFTU) remain mutually inverse, which  !
+!   is the property callers rely upon (e.g. for convolutions).        !
+! - FFTfit is kept identical to the original, although FFTW could     !
+!   handle any transform size, so that grid dimensions derived from   !
+!   it stay unchanged.                                                !
+! - Data is staged through a contiguous scratch buffer, so input and  !
+!   output arrays may have any stride. Plans are cached per (kind,    !
+!   size) with FFTW_ESTIMATE. The cache is per process: CPL PARALLEL  !
+!   LOOPs fork, hence no locking is needed.                           !
+
+USE complex
+#include "fftw3.h"
+#link "-lfftw3 -lm"
+
+SUBROUTINE FFTSETUP(INTEGER N) FOLLOWS
+INLINE SUBROUTINE IFT(COMPLEX R^(*)) = IFT(R,R)
+SUBROUTINE IFT(COMPLEX Rin^(*), Rout^(*)) FOLLOWS
+INLINE SUBROUTINE FFT(COMPLEX R^(*)) = FFT(R,R)
+SUBROUTINE FFT(COMPLEX Rin^(*), Rout^(*)) FOLLOWS
+INLINE SUBROUTINE RFT(COMPLEX R^(*)) = RFT(R,R)
+SUBROUTINE RFT(COMPLEX Rin^(*), Rout^(*)) FOLLOWS
+INLINE SUBROUTINE HFT(COMPLEX R^(*)) = HFT(R,R)
+SUBROUTINE HFT(COMPLEX Rin^(*), Rout^(*)) FOLLOWS
+INLINE SUBROUTINE IFTU(COMPLEX R^(*)) = IFTU(R,R)
+SUBROUTINE IFTU(#pointersafe COMPLEX Rin^(*), Rout^(*)) FOLLOWS
+INLINE SUBROUTINE FFTU(COMPLEX R^(*)) = FFTU(R,R)
+SUBROUTINE FFTU(#pointersafe COMPLEX Rin^(*), Rout^(*)) FOLLOWS
+INLINE SUBROUTINE RFTU(COMPLEX R^(*)) = RFTU(R,R)
+SUBROUTINE RFTU(#pointersafe COMPLEX Rin^(*), Rout^(*)) FOLLOWS
+INLINE SUBROUTINE HFTU(COMPLEX R^(*)) = HFTU(R,R)
+SUBROUTINE HFTU(#pointersafe COMPLEX Rin^(*), Rout^(*)) FOLLOWS
+
+! Identical to the original fft library, so that grid dimensions
+! derived from it (and hence all results) stay unchanged.
+BOOLEAN FUNCTION FFTfit(INTEGER VARIABLE N)
+  IF N<8 THEN RESULT=FALSE ELSE
+    LOOP UNTIL ODD(N); N = ~ RSHIFTED 1; REPEAT LOOP
+    RESULT = (N=1 OR N=3)
+  END IF
+END FFTfit
+
+C SECTION
+/* ---- FFTW backend: contiguous scratch buffer and plan cache ---- */
+double *cplfftw_buf=NULL;
+size_t cplfftw_cap=0;
+void cplfftw_ensure(size_t nd){
+  if(nd>cplfftw_cap){
+    if(cplfftw_buf!=NULL) fftw_free(cplfftw_buf);
+    cplfftw_buf=(double *)fftw_malloc(nd*sizeof(double));
+    cplfftw_cap=nd;
+  }
+}
+struct cplfftw_node{int kind; int n; fftw_plan p; struct cplfftw_node *next;};
+struct cplfftw_node *cplfftw_cache=NULL;
+/* kind: 0=c2c backward, 1=c2c forward, 2=c2r of size 2n, 3=r2c of size 2n */
+fftw_plan cplfftw_plan(int kind, int n){
+  struct cplfftw_node *q;
+  for(q=cplfftw_cache; q!=NULL; q=q->next){ if(q->kind==kind && q->n==n) return q->p; }
+  q=(struct cplfftw_node *)malloc(sizeof(struct cplfftw_node));
+  q->kind=kind; q->n=n;
+  cplfftw_ensure(kind>=2 ? (size_t)(2*n+2) : (size_t)(2*n));
+  if(kind==0) q->p=fftw_plan_dft_1d(n,(fftw_complex *)cplfftw_buf,(fftw_complex *)cplfftw_buf,FFTW_BACKWARD,FFTW_ESTIMATE);
+  else if(kind==1) q->p=fftw_plan_dft_1d(n,(fftw_complex *)cplfftw_buf,(fftw_complex *)cplfftw_buf,FFTW_FORWARD,FFTW_ESTIMATE);
+  else if(kind==2) q->p=fftw_plan_dft_c2r_1d(2*n,(fftw_complex *)cplfftw_buf,(double *)cplfftw_buf,FFTW_ESTIMATE);
+  else q->p=fftw_plan_dft_r2c_1d(2*n,(double *)cplfftw_buf,(fftw_complex *)cplfftw_buf,FFTW_ESTIMATE);
+  q->next=cplfftw_cache; cplfftw_cache=q;
+  return q->p;
+}
+/* IFT (fwd=0): out(i) = SUM in(j)*exp(+2*pi*I*i*j/n)                  */
+/* FFT (fwd=1): out(j) = SUM in(i)*exp(-2*pi*I*i*j/n) / n              */
+void cplfftw_c2c(int fwd, int n, char *in, ssize_t istr, char *out, ssize_t ostr){
+  int j; double *s; double ninv;
+  fftw_plan p=cplfftw_plan(fwd,n);
+  cplfftw_ensure((size_t)(2*n));
+  for(j=0;j<n;j++){ s=(double *)(in+j*istr); cplfftw_buf[2*j]=s[0]; cplfftw_buf[2*j+1]=s[1]; }
+  fftw_execute_dft(p,(fftw_complex *)cplfftw_buf,(fftw_complex *)cplfftw_buf);
+  ninv=(fwd!=0 ? 1.0/n : 1.0);
+  for(j=0;j<n;j++){ s=(double *)(out+j*ostr); s[0]=ninv*cplfftw_buf[2*j]; s[1]=ninv*cplfftw_buf[2*j+1]; }
+}
+/* RFT: N complex Fourier coefficients -> 2N packed real samples,        */
+/* r(k) = c(0).REAL + 2*SUM_{j=1}^{N-1} REAL[c(j)*exp(+2*pi*I*j*k/(2N))]  */
+void cplfftw_rft(int len, char *in, ssize_t istr, char *out, ssize_t ostr){
+  int N=len&(~1); int j; double *s;
+  fftw_plan p=cplfftw_plan(2,N);
+  cplfftw_ensure((size_t)(2*N+2));
+  s=(double *)in;
+  cplfftw_buf[0]=s[0]; cplfftw_buf[1]=0.0;
+  for(j=1;j<N;j++){ s=(double *)(in+j*istr); cplfftw_buf[2*j]=s[0]; cplfftw_buf[2*j+1]=s[1]; }
+  if((len&1)!=0){ s=(double *)(in+(ssize_t)N*istr); cplfftw_buf[2*N]=s[0]; } else cplfftw_buf[2*N]=0.0;
+  cplfftw_buf[2*N+1]=0.0;
+  fftw_execute_dft_c2r(p,(fftw_complex *)cplfftw_buf,(double *)cplfftw_buf);
+  for(j=0;j<N;j++){ s=(double *)(out+j*ostr); s[0]=cplfftw_buf[2*j]; s[1]=cplfftw_buf[2*j+1]; }
+}
+/* HFT: 2N packed real samples -> N complex Fourier coefficients (inverse of RFT) */
+void cplfftw_hft(int len, char *in, ssize_t istr, char *out, ssize_t ostr){
+  int N=len&(~1); int j; double *s; double n2inv;
+  fftw_plan p=cplfftw_plan(3,N);
+  cplfftw_ensure((size_t)(2*N+2));
+  for(j=0;j<N;j++){ s=(double *)(in+j*istr); cplfftw_buf[2*j]=s[0]; cplfftw_buf[2*j+1]=s[1]; }
+  cplfftw_buf[2*N]=0.0; cplfftw_buf[2*N+1]=0.0;
+  fftw_execute_dft_r2c(p,(double *)cplfftw_buf,(fftw_complex *)cplfftw_buf);
+  n2inv=0.5/N;
+  for(j=1;j<N;j++){ s=(double *)(out+j*ostr); s[0]=n2inv*cplfftw_buf[2*j]; s[1]=n2inv*cplfftw_buf[2*j+1]; }
+  s=(double *)out; s[0]=n2inv*cplfftw_buf[0]; s[1]=0.0;
+  if((len&1)!=0){ s=(double *)(out+(ssize_t)N*ostr); s[0]=n2inv*cplfftw_buf[2*N]; s[1]=0.0; }
+}
+END C SECTION
+
+MODULE fftw
+
+! Kept for interface compatibility: FFTW plans are set up on demand.
+SUBROUTINE FFTSETUP(INTEGER N)
+END FFTSETUP
+
+SUBROUTINE IFT(COMPLEX Rin^(*), Rout^(*))
+C SECTION
+  cplfftw_c2c(0,(int)(Rin_h-Rin_l+1),Rin__,Rin_i,Rout__,Rout_i);
+END C SECTION
+END IFT
+
+SUBROUTINE FFT(COMPLEX Rin^(*), Rout^(*))
+C SECTION
+  cplfftw_c2c(1,(int)(Rin_h-Rin_l+1),Rin__,Rin_i,Rout__,Rout_i);
+END C SECTION
+END FFT
+
+SUBROUTINE RFT(COMPLEX Rin^(*), Rout^(*))
+C SECTION
+  cplfftw_rft((int)(Rin_h-Rin_l+1),Rin__,Rin_i,Rout__,Rout_i);
+END C SECTION
+END RFT
+
+SUBROUTINE HFT(COMPLEX Rin^(*), Rout^(*))
+C SECTION
+  cplfftw_hft((int)(Rin_h-Rin_l+1),Rin__,Rin_i,Rout__,Rout_i);
+END C SECTION
+END HFT
+
+! The unordered variants coincide with the ordered transforms (see notes above)
+SUBROUTINE IFTU(#pointersafe COMPLEX Rin^(*), Rout^(*))
+  IFT(Rin,Rout)
+END IFTU
+SUBROUTINE FFTU(#pointersafe COMPLEX Rin^(*), Rout^(*))
+  FFT(Rin,Rout)
+END FFTU
+SUBROUTINE RFTU(#pointersafe COMPLEX Rin^(*), Rout^(*))
+  RFT(Rin,Rout)
+END RFTU
+SUBROUTINE HFTU(#pointersafe COMPLEX Rin^(*), Rout^(*))
+  HFT(Rin,Rout)
+END HFTU
+
+END fftw
+
+! 2D and 3D transforms as loops of 1D transforms (as in fft.cmn)
+INLINE SUBROUTINE IFT(COMPLEX R^(*,*)) = IFT(R,R)
+SUBROUTINE IFT(COMPLEX Rin^(*,*), Rout^(*,*))
+  DO IFT[Rin(*,j),Rout(*,j)] FOR ALL j
+  DO IFT[Rout(i,*),Rout(i,*)] FOR ALL i
+END IFT
+INLINE SUBROUTINE FFT(COMPLEX R^(*,*)) = FFT(R,R)
+SUBROUTINE FFT(COMPLEX Rin^(*,*), Rout^(*,*))
+  DO FFT[Rin(i,*),Rout(i,*)] FOR ALL i
+  DO FFT[Rout(*,j),Rout(*,j)] FOR ALL j
+END FFT
+INLINE SUBROUTINE RFT(COMPLEX R^(*,*)) = RFT(R,R)
+SUBROUTINE RFT(COMPLEX Rin^(*,*), Rout^(*,*))
+  DO IFT[Rin(*,j),Rout(*,j)] FOR ALL j
+  DO RFT[Rout(i,*),Rout(i,*)] FOR ALL i
+END RFT
+INLINE SUBROUTINE HFT(COMPLEX R^(*,*)) = HFT(R,R)
+SUBROUTINE HFT(COMPLEX Rin^(*,*), Rout^(*,*))
+  DO HFT[Rin(i,*),Rout(i,*)] FOR ALL i
+  DO FFT[Rout(*,j),Rout(*,j)] FOR ALL j
+END HFT
+INLINE SUBROUTINE IFT(COMPLEX R^(*,*,*)) = IFT(R,R)
+SUBROUTINE IFT(COMPLEX Rin^(*,*,*), Rout^(*,*,*))
+  DO IFT[Rin(*,j,k),Rout(*,j,k)] FOR ALL j,k
+  DO IFT[Rout(i,*,k),Rout(i,*,k)] FOR ALL i,k
+  DO IFT[Rout(i,j,*),Rout(i,j,*)] FOR ALL i,j
+END IFT
+INLINE SUBROUTINE FFT(COMPLEX R^(*,*,*)) = FFT(R,R)
+SUBROUTINE FFT(COMPLEX Rin^(*,*,*), Rout^(*,*,*))
+  DO FFT[Rin(i,j,*),Rout(i,j,*)] FOR ALL i,j
+  DO FFT[Rout(i,*,k),Rout(i,*,k)] FOR ALL i,k
+  DO FFT[Rout(*,j,k),Rout(*,j,k)] FOR ALL j,k
+END FFT
+INLINE SUBROUTINE RFT(COMPLEX R^(*,*,*)) = RFT(R,R)
+SUBROUTINE RFT(COMPLEX Rin^(*,*,*), Rout^(*,*,*))
+  DO IFT[Rin(*,j,k),Rout(*,j,k)] FOR ALL j,k
+  DO IFT[Rout(i,*,k),Rout(i,*,k)] FOR ALL i,k
+  DO RFT[Rout(i,j,*),Rout(i,j,*)] FOR ALL i,j
+END RFT
+INLINE SUBROUTINE HFT(COMPLEX R^(*,*,*)) = HFT(R,R)
+SUBROUTINE HFT(COMPLEX Rin^(*,*,*), Rout^(*,*,*))
+  DO HFT[Rin(i,j,*),Rout(i,j,*)] FOR ALL i,j
+  DO FFT[Rout(i,*,k),Rout(i,*,k)] FOR ALL i,k
+  DO FFT[Rout(*,j,k),Rout(*,j,k)] FOR ALL j,k
+END HFT
+
+! Utility to read the REAL values encoded in a COMPLEX array,
+! copied verbatim from fft.cpl
+POINTER TO REAL FUNCTION REALIFIED(POINTER TO ARRAY(*) OF COMPLEX x; INTEGER y)=
+IF NOT ODD(y) THEN x(y RSHIFTED 1).REAL ELSE x(y RSHIFTED 1).IMAG
+
+FRI SECTION
+function "REALIFIED"]= 1["," fullsep] =[argument -> POINTER TO ARRAY * ARRAY =[ *]= =[argument -> INTEGER value =[{INTEGER value *]=^} -> =[function POINTER TO ARRAY #2 ARRAY #1 -> function =[{ *]=^}]= *]= -> =[function "REALIFIED" -> function =[function *]=
+function "REALIFIED"]= 1["," fullsep] =[argument -> POINTER TO ARRAY * ARRAY =[{POINTER TO ARRAY *]=^} -> =[function "REALIFIED" -> function POINTER TO =[function POINTER TO ARRAY #1 *]= ]=
+function "REALIFIED"]= 1["," fullsep] =[argument -> const POINTER TO ARRAY * ARRAY =[{POINTER TO ARRAY *]=^} -> =[function "REALIFIED" -> function POINTER TO =[function const POINTER TO ARRAY #1 *]= ]=
+function "REALIFIED"]= 1["," fullsep] =[argument -> POINTER TO ARRAY { * } ^"," { * } {"COMPLEX_s"} type "COMPLEX" -> =[function POINTER TO ARRAY {: 1[const^const] ^"(" [--"," do asis] "," =[")*2"}{]= 1[const^const] ^"(" *]= =[")*2+1"}{"(signed)sizeof(double)"} REAL]= *]=
+function "REALIFIED"]= 1["," fullsep] =[argument -> const POINTER TO ARRAY { * } ^"," { * } {"COMPLEX_s)"} type "COMPLEX" -> =[function const POINTER TO ARRAY {: 1[const^const] ^"(" [--"," do asis]"," =[")*2"}{]= 1[const^const] ^"(" *]= =[")*2+1"}{"(signed)sizeof(double)"} REAL]= *]=
+END FRI SECTION
