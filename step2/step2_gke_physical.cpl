@@ -74,7 +74,13 @@ REAL t1,t2,t3,t4
 ! thread count.
 
 SHARED ARRAY(-1..ny+1,0..mx-1,0..mz-1) OF GKETERMS gke=0
+! Raw pair sums of each separation jj=jx*mz+jz, filled by the accumulation
+! kernel: 1..9 = sSE,sFX,sFY,sFZ,sFC,sUV,sUVS,sGX,sGZ; 10 = pair count
+ARRAY(0..mx*mz-1,1..10) OF REAL SR=0
 
+! Keep the plane fields, the mask, the separations and the pair-sum buffer
+! resident on the GPU in the OpenACC build (no effect otherwise)
+#pragma acc enter data copyin(PH,gmask,imx,imz,SR)
 ! Compute Kolmogorov Equation
 ! -------------------------------
 LOOP files FOR if=nfmin TO nfmax BY dn
@@ -93,7 +99,7 @@ LOOP files FOR if=nfmin TO nfmax BY dn
  STRING field_name = WRITE("Dati.cart."if".fld"); diskimage = OPEN(field_name);
  STRING pressure_name = WRITE('pField'if'.fld');  pressuredata=OPEN(pressure_name);
  STRING mask_name = WRITE("mask."if".fld"); maskimage=OPENRO(mask_name)
- IF maskimage=NULL THEN DO gmask(ix,iz,i)=1 FOR ALL ix,iz,i
+ IF maskimage=NULL THEN DO gmask(i,ix,iz)=1 FOR ALL i,ix,iz
 #ifdef wholefield
  WRITE "iproc=",iproc, "   ","Reading data..."; t1=wallclock();
   Vtot=diskimage.Vimage; CLOSE diskimage
@@ -118,7 +124,7 @@ LOOP files FOR if=nfmin TO nfmax BY dn
 #endif
         ! Remove mean
         WITH mean(1),V(0,0,1): u.REAL=~-U; w.REAL=~-W; p(0,0,1)=~-P;
-        IF maskimage#NULL THEN gmask(*,*,1)=maskimage(iy1,*,*)
+        IF maskimage#NULL THEN gmask(1,*,*)=maskimage(iy1,*,*)
         preparephys(1)
         LOOP inner FOR IY2=IY1 TO ny-IY1
           iy2 = IF sig=1  THEN IY2 ELSE ny-IY2
@@ -130,45 +136,56 @@ LOOP files FOR if=nfmin TO nfmax BY dn
           bufp = pressuredata(iy2,*,*);     p(*,*,2)=bufp; uiuj(2)=uiujimage.uiujdata(iy2);
 #endif
           WITH mean(2),V(0,0,2): u.REAL=~-U; w.REAL=~-W; p(0,0,2)=~-P;
-          IF maskimage#NULL THEN gmask(*,*,2)=maskimage(iy2,*,*)
+          IF maskimage#NULL THEN gmask(2,*,*)=maskimage(iy2,*,*)
           preparephys(2)
           ! Direct accumulation of the two-point statistics over pairs of
           ! points (x, x+r) of the physical grid; pairs with at least one
-          ! point inside a particle are skipped and the averages are
-          ! renormalized by the number npair of accumulated pairs.
-          ! Each jj identifies one independent separation (jx,jz).
+          ! point inside a particle are skipped. Each jj identifies one
+          ! independent separation (jx,jz), whose raw pair sums are written
+          ! to SR: on the GPU (OpenACC build), on a thread pool (OpenMP
+          ! build) or serially, with results identical to the last bit
+          ! between the serial and the OpenMP version.
+#pragma acc update device(PH,gmask)
+#pragma acc parallel loop gang present(PH,gmask,imx,imz,SR)
 #pragma omp parallel for schedule(dynamic)
           LOOP FOR jj=0 TO mx*mz-1
             INTEGER jx=jj DIV mz, jz=jj MOD mz
             INTEGER rx=imx(jx), rz=imz(jz), npair=0
             REAL sSE=0, sFX=0, sFY=0, sFZ=0, sFC=0, sUV=0, sUVS=0, sGX=0, sGZ=0
+#pragma acc loop vector collapse(2) reduction(+:sSE,sFX,sFY,sFZ,sFC,sUV,sUVS,sGX,sGZ,npair)
             LOOP FOR ix=0 TO 2*nxd-1
               LOOP FOR iz=0 TO nzd-1
                 INTEGER ix2=(ix+rx) MOD nxc, iz2=(iz+rz) MOD nzd
-                IF gmask(ix,iz,1)>0.5 AND gmask(ix2,iz2,2)>0.5 THEN
-                  PHYSPLANE P1,P2
-                  P1=PH(ix,iz,1); P2=PH(ix2,iz2,2)
-                  REAL du=P2.u-P1.u, dv=P2.v-P1.v, dw=P2.w-P1.w
-                  REAL dpp=P2.pf-P1.pf, vs=P1.v+P2.v
+                IF gmask(1,ix,iz)>0.5 AND gmask(2,ix2,iz2)>0.5 THEN
+                  REAL du=PH(2,fU,ix2,iz2)-PH(1,fU,ix,iz), dv=PH(2,fV,ix2,iz2)-PH(1,fV,ix,iz), dw=PH(2,fW,ix2,iz2)-PH(1,fW,ix,iz)
+                  REAL dpp=PH(2,fP,ix2,iz2)-PH(1,fP,ix,iz), vs=PH(1,fV,ix,iz)+PH(2,fV,ix2,iz2)
                   REAL e2=du*du+dv*dv+dw*dw
                   sSE=~+e2; sFX=~+e2*du; sFY=~+e2*dv; sFZ=~+e2*dw
                   sFC=~+0.5*vs*e2+2*dpp*dv
                   sUV=~+du*dv; sUVS=~+du*vs
-                  sGX=~+du*(P1.ux+P2.ux)+dv*(P1.vx+P2.vx)+dw*(P1.wx+P2.wx)
-                  sGZ=~+du*(P1.uz+P2.uz)+dv*(P1.vz+P2.vz)+dw*(P1.wz+P2.wz)
+                  sGX=~+du*(PH(1,fUX,ix,iz)+PH(2,fUX,ix2,iz2))+dv*(PH(1,fVX,ix,iz)+PH(2,fVX,ix2,iz2))+dw*(PH(1,fWX,ix,iz)+PH(2,fWX,ix2,iz2))
+                  sGZ=~+du*(PH(1,fUZ,ix,iz)+PH(2,fUZ,ix2,iz2))+dv*(PH(1,fVZ,ix,iz)+PH(2,fVZ,ix2,iz2))+dw*(PH(1,fWZ,ix,iz)+PH(2,fWZ,ix2,iz2))
                   INC npair
                 END IF
               REPEAT
             REPEAT
-            IF npair>0 THEN
-              REAL cn=1.0/npair
-              REAL iscaleENER=sSE*cn
+            SR(jj,1)=sSE; SR(jj,2)=sFX; SR(jj,3)=sFY; SR(jj,4)=sFZ; SR(jj,5)=sFC
+            SR(jj,6)=sUV; SR(jj,7)=sUVS; SR(jj,8)=sGX; SR(jj,9)=sGZ; SR(jj,10)=npair
+          REPEAT
+          ! Renormalize the pair sums by the number of accumulated pairs and
+          ! update the GKE terms (on the host: this part is cheap)
+#pragma acc update host(SR)
+          LOOP FOR jj=0 TO mx*mz-1
+            INTEGER jx=jj DIV mz, jz=jj MOD mz
+            IF SR(jj,10)>0.5 THEN
+              REAL cn=1.0/SR(jj,10)
+              REAL iscaleENER=SR(jj,1)*cn
               gke(IY2,jx,jz).scaleENER=~+iscaleENER
-              gke(IY2,jx,jz).phiR(1)=~+sFX*cn+iscaleENER*[mean(2).U-mean(1).U]-2*ni*sGX*cn
-              gke(IY2,jx,jz).phiR(2)=~+sig*sFY*cn
-              gke(IY2,jx,jz).phiR(3)=~+sFZ*cn+iscaleENER*[mean(2).W-mean(1).W]-2*ni*sGZ*cn
-              gke(IY2,jx,jz).phiC=~+sig*[sFC*cn]
-              gke(IY2,jx,jz).scalePROD=~-[sUV*cn]*[mean(1).Uy+mean(2).Uy]-[sUVS*cn]*[mean(2).Uy-mean(1).Uy]-[SUM uiuj(1).psdiss(i)+uiuj(2).psdiss(i) FOR i=1 TO 3]
+              gke(IY2,jx,jz).phiR(1)=~+SR(jj,2)*cn+iscaleENER*[mean(2).U-mean(1).U]-2*ni*SR(jj,8)*cn
+              gke(IY2,jx,jz).phiR(2)=~+sig*SR(jj,3)*cn
+              gke(IY2,jx,jz).phiR(3)=~+SR(jj,4)*cn+iscaleENER*[mean(2).W-mean(1).W]-2*ni*SR(jj,9)*cn
+              gke(IY2,jx,jz).phiC=~+sig*[SR(jj,5)*cn]
+              gke(IY2,jx,jz).scalePROD=~-[SR(jj,6)*cn]*[mean(1).Uy+mean(2).Uy]-[SR(jj,7)*cn]*[mean(2).Uy-mean(1).Uy]-[SUM uiuj(1).psdiss(i)+uiuj(2).psdiss(i) FOR i=1 TO 3]
             END IF
           REPEAT
         REPEAT inner

@@ -238,11 +238,16 @@ END convolutions
 ! skipped and averages are renormalized by the number of accumulated pairs.
 ! Without a mask file all points are fluid and results equal the Fourier path.
 #ifdef physicalspace
-PHYSPLANE = STRUCTURE(REAL u,v,w,pf,ux,vx,wx,uz,vz,wz)
-SHARED ARRAY(0..2*nxd-1,0..nzd-1,1..2) OF PHYSPLANE PH=0
-SHARED ARRAY(0..2*nxd-1,0..nzd-1,1..2) OF REAL gmask=0
-DO gmask(ix,iz,i)=1 FOR ALL ix,iz,i
-SHARED ARRAY(0..nxd-1,0..nzd-1) OF COMPLEX scrp=0
+! Physical-space plane storage: PH(i,f,ix,iz) holds field f of plane i on the
+! fine grid, with the field index f named by the following constants
+! (velocity components, pressure, x- and z-derivatives of the velocity).
+! One plane of one field is contiguous, which the GPU kernel of
+! step2_gke_physical.cpl relies upon for coalesced access.
+fU=1; fV=2; fW=3; fP=4; fUX=5; fVX=6; fWX=7; fUZ=8; fVZ=9; fWZ=10
+ARRAY(1..2,1..10,0..2*nxd-1,0..nzd-1) OF REAL PH=0
+ARRAY(1..2,0..2*nxd-1,0..nzd-1) OF REAL gmask=0
+DO gmask(i,ix,iz)=1 FOR ALL i,ix,iz
+ARRAY(0..nxd-1,0..nzd-1) OF COMPLEX scrp=0
 POINTER TO STORED ARRAY(-1..ny+1,0..2*nxd-1,0..nzd-1) OF REAL maskimage
 
 ! Transform one spectral plane f to physical space into g
@@ -266,10 +271,10 @@ END tophys
 
 ! Prepare all physical fields of plane i (fluctuations and x/z derivatives)
 SUBROUTINE preparephys(INTEGER i)
-  tophys(V(*,*,i).u,0,PH(*,*,i).u); tophys(V(*,*,i).u,1,PH(*,*,i).ux); tophys(V(*,*,i).u,2,PH(*,*,i).uz)
-  tophys(V(*,*,i).v,0,PH(*,*,i).v); tophys(V(*,*,i).v,1,PH(*,*,i).vx); tophys(V(*,*,i).v,2,PH(*,*,i).vz)
-  tophys(V(*,*,i).w,0,PH(*,*,i).w); tophys(V(*,*,i).w,1,PH(*,*,i).wx); tophys(V(*,*,i).w,2,PH(*,*,i).wz)
-  tophys(p(*,*,i),0,PH(*,*,i).pf)
+  tophys(V(*,*,i).u,0,PH(i,fU,*,*)); tophys(V(*,*,i).u,1,PH(i,fUX,*,*)); tophys(V(*,*,i).u,2,PH(i,fUZ,*,*))
+  tophys(V(*,*,i).v,0,PH(i,fV,*,*)); tophys(V(*,*,i).v,1,PH(i,fVX,*,*)); tophys(V(*,*,i).v,2,PH(i,fVZ,*,*))
+  tophys(V(*,*,i).w,0,PH(i,fW,*,*)); tophys(V(*,*,i).w,1,PH(i,fWX,*,*)); tophys(V(*,*,i).w,2,PH(i,fWZ,*,*))
+  tophys(p(*,*,i),0,PH(i,fP,*,*))
 END preparephys
 #endif
 

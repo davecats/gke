@@ -107,13 +107,13 @@ LOOP files FOR n=nfmin TO nfmax BY dn
   STRING field_name = WRITE("Dati.cart."n".fld"); diskimage = OPEN(field_name); Vtot=diskimage.Vimage; CLOSE diskimage
   STRING pressure_name = WRITE('pField'n'.fld');  pressuredata=OPEN(pressure_name); ptot=pressuredata; CLOSE pressuredata
   STRING mask_name = WRITE("mask."n".fld"); maskimage=OPENRO(mask_name)
-  IF maskimage=NULL THEN DO gmask(ix,iz,i)=1 FOR ALL ix,iz,i
+  IF maskimage=NULL THEN DO gmask(i,ix,iz)=1 FOR ALL i,ix,iz
   LOOP FOR iy=-1 TO ny+1
-    IF maskimage#NULL THEN gmask(*,*,1)=maskimage(iy,*,*)
+    IF maskimage#NULL THEN gmask(1,*,*)=maskimage(iy,*,*)
     preparemeanphys(iy)
     npoint=0; sU=0; sW=0; sP=0
     LOOP FOR ix=0 TO 2*nxd-1 AND iz=0 TO nzd-1
-      IF gmask(ix,iz,1)>0.5 THEN
+      IF gmask(1,ix,iz)>0.5 THEN
         q=PH1(ix,iz); sU=~+q.u; sW=~+q.w; sP=~+q.pf; INC npoint
       END IF
     REPEAT
@@ -135,7 +135,7 @@ LOOP fields FOR n=nfmin TO nfmax BY dn
   STRING field_name = WRITE("Dati.cart."n".fld"); diskimage = OPEN(field_name); Vtot=diskimage.Vimage; CLOSE diskimage
   STRING pressure_name = WRITE('pField'n'.fld');  pressuredata=OPEN(pressure_name); ptot=pressuredata; CLOSE pressuredata
   STRING mask_name = WRITE("mask."n".fld"); maskimage=OPENRO(mask_name)
-  IF maskimage=NULL THEN DO gmask(ix,iz,i)=1 FOR ALL ix,iz,i
+  IF maskimage=NULL THEN DO gmask(i,ix,iz)=1 FOR ALL i,ix,iz
   ! Compute fluctuating field
   WITH meantot(*),Vtot(*,0,0): u.REAL=~-U; w.REAL=~-W; ptot(*,0,0)=~-P;
   ! Compute derivatives (spectrally)
@@ -144,11 +144,11 @@ LOOP fields FOR n=nfmin TO nfmax BY dn
   ! inside a particle are skipped and the averages are renormalized by the
   ! number npoint of accumulated fluid points.
   LOOP FOR iy=-1 TO ny+1
-    IF maskimage#NULL THEN gmask(*,*,1)=maskimage(iy,*,*)
+    IF maskimage#NULL THEN gmask(1,*,*)=maskimage(iy,*,*)
     preparefullphys(iy)
     npoint=0; svar=0; spst=0; spsd=0; sttr=0; spu=0; spv=0; spw=0
     LOOP FOR ix=0 TO 2*nxd-1 AND iz=0 TO nzd-1
-      IF gmask(ix,iz,1)>0.5 THEN
+      IF gmask(1,ix,iz)>0.5 THEN
         q=PH1(ix,iz)
         svar(1)=~+q.u*q.u; svar(2)=~+q.v*q.v; svar(3)=~+q.w*q.w
         svar(4)=~+q.u*q.v; svar(5)=~+q.u*q.w; svar(6)=~+q.v*q.w
