@@ -9,7 +9,7 @@ This repository is the reference implementation of the GKE described in
 
 The code is:
 * *Simple*: it consists of few lines of code 
-* *Parallel*: with shared and distributed memory parallelization
+* *Parallel*: with shared and distributed memory parallelization, and optional GPU offload
 * *Efficient*: it leverages Fast Fourier Transform algorithms whenever possible
 
 and written in the 
@@ -19,28 +19,73 @@ and written in the
 
 The code is written in the programming language CPL, whose compiler can be downloaded [here](https://cplcode.net/).
 
-The computation is divided in three steps, each of them provided as a separate program:
-1) *step1/step1_singlepoints_fourier.cpl*: the computation of the single-point budgets of the Reynolds stresses
-2) *step2/step2_gke_fourier.cpl*: the computation of the GKE terms that do not involve a wall-normal derivatives
-3) *step3/step3_gke.cpl*: the computation of the GKE terms involving wall-normal derivatives
+The computation is divided in three steps, each of them provided as a separate program and run in sequence:
+1) **step 1** computes the single-point budgets of the Reynolds stresses and the mean profiles, and writes them to *uiuj.bin*;
+2) **step 2** computes the GKE terms that do not involve wall-normal derivatives, reading *uiuj.bin* and writing *gke.bin*;
+3) **step 3** (*step3/step3_gke.cpl*) adds the GKE terms involving wall-normal derivatives, updating *gke.bin* in place.
 
-Steps 1) and 2) exist in two interchangeable variants: the pseudo-spectral one (*_fourier.cpl*, the default and fastest, which evaluates the statistics with Parseval's theorem and the convolution theorem) and a physical-space one (*_physical.cpl*, slower, which accumulates the same statistics point by point and supports particle masking, see below). For single-phase flows the two variants produce identical results up to round-off.
+Steps 1 and 2 exist in two interchangeable variants, so that three execution paths are available:
 
-In the directory *tutorial* you can find the bash script *tutorial/run_tutorial.bash* which will compile the code and run it on simple test data, which correspond to a Minimal Flow Unit (MFU) at a friction Reynolds number of $Re_\tau=200$. The tutorial requires a working CPL installation and MATLAB, in order to visualise the results. 
+| path | programs | purpose |
+|---|---|---|
+| Fourier (default) | *step1_singlepoints_fourier*, *step2_gke_fourier* | fastest CPU path: statistics evaluated with Parseval's theorem and the convolution theorem |
+| physical space | *step1_singlepoints_physical*, *step2_gke_physical* | statistics accumulated point by point (step 1) and over pairs of points (step 2); slower, but supports particle masking |
+| physical space on GPU | same as above, step 2 built with the NVIDIA HPC SDK | offloads the pair-accumulation kernel, which dominates the cost of step 2, to a GPU |
 
-The memory requirement of Step 2) can be further reduced by commenting the line  
-```#define wholefiled```  
+For single-phase flows all paths produce identical results: the two CPU variants agree up to round-off, and within each variant the results are independent of the number of threads or processes down to the last bit. All programs are OpenMP-parallel; the distributed-memory parallelization of step 2 and the GPU offload are described below.
+
+### Input and output files
+
+The programs run in a case directory containing:
+* *dns.in* — the simulation parameters (grid, box, Reynolds number, ...);
+* *Dati.cart.〈n〉.fld* and *pField〈n〉.fld* — the velocity and pressure snapshots, n = nfmin ... nfmax;
+* *mask.〈n〉.fld* — optional particle masks for the physical-space path (see below).
+
+The snapshot range (nfmin, nfmax, dn), the limits of the undersampled separations (uLx1, uLx2, uLz1, uLz2) and the output file name are set at the top of *gkedata.cpl* and compiled into the programs: edit them and recompile for a new case. The outputs are *uiuj.bin* (single-point budgets, step 1) and *gke.bin* (GKE terms, steps 2 and 3); their binary layout is documented in *tutorial/check.py*, which also shows how to read and plot them (MATLAB equivalent: *tutorial/check.m*).
+
+### Compiling
+
+`./compile.bash` builds all five programs with gcc and OpenMP enabled. Individual programs are built with, e.g.,
+```
+cd step2; cpl make step2_gke_fourier.cpl -fopenmp
+```
+(omitting `-fopenmp` gives a serial build with identical results). For the GPU build of step 2, load the NVIDIA HPC SDK environment (e.g. `module load nvhpc`) and use
+```
+cd step2; GPU=1 cpl make step2_gke_physical.cpl -acc=gpu
+```
+The local *step2/Makefile* selects the compiler: gcc by default, nvc when `GPU=1` is set. The NVIDIA HPC SDK runtime libraries must also be available when running the GPU build.
+
+### Running
+
+From the case directory, run the three steps of the chosen path in sequence, e.g.
+```
+export OMP_WAIT_POLICY=passive
+export OMP_NUM_THREADS=24
+../step1/step1_singlepoints_fourier
+../step2/step2_gke_fourier
+../step3/step3_gke
+```
+`OMP_NUM_THREADS` selects the number of threads; setting `OMP_WAIT_POLICY=passive` is recommended, since the default busy-waiting policy can slow down the parallel regions considerably when all hardware threads are used (the programs print a hint if it is unset).
+
+Step 2, by far the most expensive one, additionally supports distributed-memory parallelization: launched as
+```
+../step2/step2_gke_fourier <iproc> <nproc>
+```
+each of the nproc independently started processes computes its own range of wall-normal positions and writes its own disjoint part of *gke.bin* (which is shared, so the processes may run on different nodes of a common filesystem). All processes must complete before step 3 is run. For the GPU build, one GPU is used per process and can be selected with `ACC_DEVICE_NUM` or `CUDA_VISIBLE_DEVICES`.
+
+The directory *tutorial* contains the bash script *tutorial/run_tutorial.bash*, which compiles the code and runs the Fourier path on simple test data corresponding to a Minimal Flow Unit (MFU) at a friction Reynolds number of $Re_\tau=200$, visualising the results with MATLAB (*check.m*) — or use `python3 check.py` if MATLAB is unavailable.
+
+The memory requirement of step 2 can be reduced by commenting the line  
+```#define wholefield```  
 of *step2/step2_gke_fourier.cpl* (or *step2/step2_gke_physical.cpl*). Doing so will deactivate loading the whole velocity field and only a pair (iy1,iy2) of wall-parallel planes of the velocity field will be loaded at a time. Beware that this increases the I/O and possibly slows down calculations.
 
 ### Physical-space statistics and particle masking
 
-The programs *step1/step1_singlepoints_physical.cpl* and *step2/step2_gke_physical.cpl* accumulate the statistics point by point (step 1) and over pairs of points (step 2) in physical space, instead of using Parseval's theorem and the convolution theorem. For single-phase flows the results are identical (to round-off) to those of the *_fourier* programs, but the computation is slower. Their purpose is masked statistics, e.g. for particle-laden flows: for each snapshot *Dati.cart.〈n〉.fld* an optional mask file *mask.〈n〉.fld* is read if present, a `STORED ARRAY(-1..ny+1, 0..2*nxd-1, 0..nzd-1) OF REAL` (i.e. double precision, C-ordered, on the fine physical grid nxc × nzc printed at startup) with 1.0 marking fluid points and 0.0 solid points. Points (step 1) and point pairs (step 2) with at least one point inside the solid phase are skipped, and every average is renormalized by the number of accumulated points or pairs. If no mask file exists all points are treated as fluid. In step 1 the velocity gradient is still computed spectrally from the global field; only the accumulation of the statistics is performed in physical space. Both physical-space programs are OpenMP-parallel: compile them with `-fopenmp` (as *compile.bash* does) and select the number of threads with `OMP_NUM_THREADS`; setting `OMP_WAIT_POLICY=passive` is recommended, since the default busy-waiting policy can slow down the parallel regions considerably when all hardware threads are used.
+The programs *step1/step1_singlepoints_physical.cpl* and *step2/step2_gke_physical.cpl* accumulate the statistics point by point (step 1) and over pairs of points (step 2) in physical space, instead of using Parseval's theorem and the convolution theorem. For single-phase flows the results are identical (to round-off) to those of the *_fourier* programs, but the computation is slower. Their purpose is masked statistics, e.g. for particle-laden flows: for each snapshot *Dati.cart.〈n〉.fld* an optional mask file *mask.〈n〉.fld* is read if present, a `STORED ARRAY(-1..ny+1, 0..2*nxd-1, 0..nzd-1) OF REAL` (i.e. double precision, C-ordered, on the fine physical grid nxc × nzc printed at startup) with 1.0 marking fluid points and 0.0 solid points. Points (step 1) and point pairs (step 2) with at least one point inside the solid phase are skipped, and every average is renormalized by the number of accumulated points or pairs. If no mask file exists all points are treated as fluid. In step 1 the velocity gradient is still computed spectrally from the global field; only the accumulation of the statistics is performed in physical space.
 
-### GPU acceleration
+### GPU offload
 
-The pair-accumulation kernel of *step2_gke_physical.cpl* carries OpenACC directives next to the OpenMP ones, so the same source can be offloaded to a GPU with the NVIDIA HPC SDK compiler. The local *step2/Makefile* selects the compiler: after loading the NVIDIA HPC SDK environment (e.g. `module load nvhpc`), build with  
-```GPU=1 cpl make step2_gke_physical.cpl -acc=gpu```  
-and run as usual (the NVIDIA HPC SDK runtime libraries must be available at run time as well). The plane fields, the particle mask and the undersampled separations stay resident on the GPU; only the per-plane fields and the small buffer of pair sums are exchanged per pair of planes, and the renormalization and GKE updates remain on the host. The GPU results coincide with the CPU ones up to round-off (the parallel reduction changes the summation order); on double-precision-capable data-center GPUs the kernel, which performs the overwhelming majority of the work, is essentially flop-bound.
+The pair-accumulation kernel of *step2_gke_physical.cpl* carries OpenACC directives next to the OpenMP ones, so a single source serves the serial, multithreaded and GPU execution paths. In the GPU build the plane fields, the particle mask and the undersampled separations stay resident on the GPU; per pair of wall-parallel planes only the updated plane fields are copied in and the small buffer of raw pair sums out, while the renormalization by the pair counts and the GKE updates remain on the host. The GPU results coincide with the CPU ones up to round-off (the parallel reduction changes the summation order); on double-precision-capable data-center GPUs the kernel, which performs the overwhelming majority of the work, is essentially flop-bound.
 
 ### Database
 
