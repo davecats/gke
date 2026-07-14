@@ -46,7 +46,7 @@ REAL t1,t2,t3,t4
 
 ! Compute Derivatives
 ! -------------------------------
-SHARED ARRAY(0..startpos(ny DIV 2 +1)-1,0..mz-1) OF GKETERMS gkemem=0,gkememM=0
+ARRAY(0..startpos(ny DIV 2 +1)-1,0..mz-1) OF GKETERMS gkemem=0,gkememM=0
 INLINE FUNCTION indx(INTEGER i,j)=startpos(i)+j-i
 INLINE FUNCTION gkeP(INTEGER i,j)=gkemem(indx(i,j),iz)
 INLINE FUNCTION gkeM(INTEGER i,j)=gkememM(indx(i,j),(mz-iz) MOD mz)

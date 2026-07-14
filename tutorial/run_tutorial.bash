@@ -12,12 +12,15 @@ then
 fi
 
 # Compile all files
-cd ..; cd step1; makecpl -a step1_singlepoints_fourier.cpl;
-cd ..; cd step2; makecpl -a step2_gke_fourier.cpl; 
+cd ..; cd step1; makecpl -a step1_singlepoints_fourier.cpl -fopenmp;
+cd ..; cd step2; makecpl -a step2_gke_fourier.cpl -fopenmp; 
 cd ..; cd step3; makecpl -a step3_gke.cpl; 
 cd $DIR
 
 # Run the calculation of the GKE
+# (the default busy-waiting OpenMP policy can be slow when all hardware
+# threads are used, see README.md)
+export OMP_WAIT_POLICY=${OMP_WAIT_POLICY:-passive}
 ../step1/step1_singlepoints_fourier
 ../step2/step2_gke_fourier
 ../step3/step3_gke

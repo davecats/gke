@@ -73,7 +73,7 @@ REAL t1,t2,t3,t4
 ! the results are identical to the serial ones down to the last bit for any
 ! thread count.
 
-SHARED ARRAY(-1..ny+1,0..mx-1,0..mz-1) OF GKETERMS gke=0
+ARRAY(-1..ny+1,0..mx-1,0..mz-1) OF GKETERMS gke=0
 ! Raw pair sums of each separation jj=jx*mz+jz, filled by the accumulation
 ! kernel: 1..9 = sSE,sFX,sFY,sFZ,sFC,sUV,sUVS,sGX,sGZ; 10 = pair count
 ARRAY(0..mx*mz-1,1..10) OF REAL SR=0

@@ -54,16 +54,16 @@ SUBROUTINE cprod3(COMPLEX f,g,k; POINTER TO COMPLEX h)=h.REAL=f.REAL*g.REAL*k.RE
 !#define cprod(f,g,h) h.REAL=f.REAL*g.REAL; h.IMAG=f.IMAG*g.IMAG
 !#define cprod3(f,g,k,h) h.REAL=f.REAL*g.REAL*k.REAL; h.IMAG=f.IMAG*g.IMAG*k.IMAG
 
-SHARED ARRAY(0..nx,-nz..nz,-1..ny+1) OF DERIVS Vder=0
+ARRAY(0..nx,-nz..nz,-1..ny+1) OF DERIVS Vder=0
 
 DERPRODSEXT = STRUCTURE(COMPLEX ux2,vx2,wx2,uy2,vy2,wy2,uz2,vz2,wz2,uxvx,uyvy,uzvz,uxwx,uywy,uzwz,vxwx,vywy,vzwz)
-SHARED ARRAY(0..nxd-1,0..nzd-1) OF DERIVS Vderd=0
-SHARED ARRAY(0..nxd-1,0..nzd-1) OF DERPRODSEXT VVderd=0
-SHARED ARRAY(0..nxd-1,0..nzd-1,1..6) OF COMPLEX PHIttrspd=0
+ARRAY(0..nxd-1,0..nzd-1) OF DERIVS Vderd=0
+ARRAY(0..nxd-1,0..nzd-1) OF DERPRODSEXT VVderd=0
+ARRAY(0..nxd-1,0..nzd-1,1..6) OF COMPLEX PHIttrspd=0
 
-SHARED ARRAY(-1..ny+1) OF MEANTERMS meantot=0
-SHARED ARRAY(-1..ny+1) OF BALANCE uiujtot=0
-SHARED ARRAY(-1..ny+1) OF MKETERMS mketot=0
+ARRAY(-1..ny+1) OF MEANTERMS meantot=0
+ARRAY(-1..ny+1) OF BALANCE uiujtot=0
+ARRAY(-1..ny+1) OF MKETERMS mketot=0
 
 ! Compute the average field
 ! ------------------------------------
@@ -101,19 +101,19 @@ LOOP fields FOR n=nfmin TO nfmax BY dn
       pstrain(3) = ~ + 2*c*[wz|pp].REAL; pstrain(6) = ~ + c*[(vz|pp)+(wy|pp)].REAL
     REPEAT
   REPEAT
-  ! Pseudo-spectral method for psdiss and PHIttrsp
-  PARALLEL LOOP FOR ismp=0 TO nsmp-1
+  ! Pseudo-spectral method for psdiss and PHIttrsp (the stages are threaded
+  ! by the OpenMP pragmas below, ignored unless compiled with -fopenmp)
   LOOP FOR iy=-1 TO ny+1
-    LOOP FOR ix=ismp*(nx+1) DIV nsmp TO (ismp+1)*(nx+1) DIV nsmp -1
+#pragma omp parallel for
+    LOOP FOR ix=0 TO nx
       DO Vderd(ix,i)=Vder(ix,i,iy); FOR i=0 TO nz Vderd(ix,nz+1..nzd-nz-1)=0; DO Vderd(ix,nzd+i)=Vder(ix,i,iy) FOR i=-nz TO -1
       Vd(ix,0..nz)=Vtot(iy,ix,0..nz);    Vd(ix,nz+1..nzd-nz-1)=0;    Vd(ix,nzd+(-nz..-1))=Vtot(iy,ix,-nz..-1)
       WITH Vderd(ix,*): INLINE LOOP FOR ii IN (ux,vx,wx,uy,vy,wy,uz,vz,wz); IFT(ii); REPEAT
       WITH Vd(ix,*):    INLINE LOOP FOR i  IN (u,v,w); IFT(i); REPEAT
     REPEAT LOOP
-    IF ismp=0 THEN Vd(nx+1..nxd-1)=0; Vderd(nx+1..nxd-1)=0
-    
-    SYNC(ismp,nsmp)
-    DO
+    Vd(nx+1..nxd-1)=0; Vderd(nx+1..nxd-1)=0
+#pragma omp parallel for
+    LOOP FOR iz=0 TO nzd-1
       WITH Vderd(*,iz): INLINE LOOP FOR ii IN (ux,vx,wx,uy,vy,wy,uz,vz,wz); RFT(ii); REPEAT
       WITH Vd(*,iz):    INLINE LOOP FOR i  IN (u,v,w); RFT(i); REPEAT
       DO WITH Vderd(ix,iz), VVderd(ix,iz), Vd(ix,iz):
@@ -125,19 +125,15 @@ LOOP fields FOR n=nfmin TO nfmax BY dn
       FOR ALL ix
       WITH VVderd(*,iz): INLINE LOOP FOR iii IN (ux2,vx2,wx2,uy2,vy2,wy2,uz2,vz2,wz2,uxvx,uyvy,uzvz,uxwx,uywy,uzwz,vxwx,vywy,vzwz); HFT(iii); REPEAT
       DO HFT(PHIttrspd(*,iz,i)) FOR ALL i
-    FOR iz=ismp*(HI+1) DIV nsmp TO (ismp+1)*(HI+1) DIV nsmp -1
-    SYNC(ismp,nsmp)
-    DO WITH VVderd(ix,*):
-      INLINE LOOP FOR iii IN (ux2,vx2,wx2,uy2,vy2,wy2,uz2,vz2,wz2,uxvx,uyvy,uzvz,uxwx,uywy,uzwz,vxwx,vywy,vzwz); FFT(iii); REPEAT
-      DO FFT(PHIttrspd(ix,*,i)); FOR ALL i
-    FOR ix=ismp*(nx+1) DIV nsmp TO (ismp+1)*(nx+1) DIV nsmp -1
-    SYNC(ismp,nsmp)
-    IF ismp=0 THEN WITH VVderd(0,0), uiujtot(iy):
+    REPEAT LOOP
+    WITH VVderd(0,*): INLINE LOOP FOR iii IN (ux2,vx2,wx2,uy2,vy2,wy2,uz2,vz2,wz2,uxvx,uyvy,uzvz,uxwx,uywy,uzwz,vxwx,vywy,vzwz); FFT(iii); REPEAT
+    DO FFT(PHIttrspd(0,*,i)); FOR ALL i
+    WITH VVderd(0,0), uiujtot(iy):
       psdiss(1)=~+2*ni*REAL[ux2+uy2+uz2]; psdiss(4)=~+2*ni*REAL[uxvx+uyvy+uzvz]; PHIttrsp(1)=~-PHIttrspd(0,0,1).REAL; PHIttrsp(4)=~-PHIttrspd(0,0,4).REAL
+    WITH VVderd(0,0), uiujtot(iy):
       psdiss(2)=~+2*ni*REAL[vx2+vy2+vz2]; psdiss(5)=~+2*ni*REAL[uxwx+uywy+uzwz]; PHIttrsp(2)=~-PHIttrspd(0,0,2).REAL; PHIttrsp(5)=~-PHIttrspd(0,0,5).REAL
+    WITH VVderd(0,0), uiujtot(iy):
       psdiss(3)=~+2*ni*REAL[wx2+wy2+wz2]; psdiss(6)=~+2*ni*REAL[vxwx+vywy+vzwz]; PHIttrsp(3)=~-PHIttrspd(0,0,3).REAL; PHIttrsp(6)=~-PHIttrspd(0,0,6).REAL
-    END IF
-  REPEAT LOOP
   REPEAT LOOP
 REPEAT fields
 

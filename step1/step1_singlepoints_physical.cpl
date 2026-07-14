@@ -69,15 +69,15 @@ if(getenv("OMP_WAIT_POLICY")==NULL)fprintf(stderr,"HINT: consider setting OMP_WA
 #endif
 *>
 
-SHARED ARRAY(0..nx,-nz..nz,-1..ny+1) OF DERIVS Vder=0
+ARRAY(0..nx,-nz..nz,-1..ny+1) OF DERIVS Vder=0
 
-SHARED ARRAY(-1..ny+1) OF MEANTERMS meantot=0
-SHARED ARRAY(-1..ny+1) OF BALANCE uiujtot=0
-SHARED ARRAY(-1..ny+1) OF MKETERMS mketot=0
+ARRAY(-1..ny+1) OF MEANTERMS meantot=0
+ARRAY(-1..ny+1) OF BALANCE uiujtot=0
+ARRAY(-1..ny+1) OF MKETERMS mketot=0
 
 ! Physical-space fields of one wall-parallel plane
 S1PLANE = STRUCTURE(REAL u,v,w,pf,ux,uy,uz,vx,vy,vz,wx,wy,wz)
-SHARED ARRAY(0..2*nxd-1,0..nzd-1) OF S1PLANE PH1=0
+ARRAY(0..2*nxd-1,0..nzd-1) OF S1PLANE PH1=0
 
 ! Accumulators (the accumulation loops run single-threaded; only the
 ! transforms inside tophys are OpenMP-parallel)
