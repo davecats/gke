@@ -9,6 +9,8 @@
 ! gradient itself is still computed spectrally; only the statistics are
 ! accumulated in physical space. For single-phase flows the results of the two
 ! implementations are identical up to round-off, but this one is slower.
+! The transforms are OpenMP-parallel: compile with -fopenmp and prefer
+! OMP_WAIT_POLICY=passive.
 ! Its purpose is masked statistics, e.g. for particle-laden flows: for each
 ! snapshot "Dati.cart.<n>.fld" an optional indicator field "mask.<n>.fld" is
 ! read if present
@@ -57,6 +59,16 @@ USE ../gkedata
 
 ! Definitions
 ! ------------------------------------
+
+! With the default libgomp wait policy, busy-waiting threads can slow down
+! the many small OpenMP parallel regions dramatically when all hardware
+! threads are used; suggest the passive policy if none was chosen.
+<*
+#ifdef _OPENMP
+if(getenv("OMP_WAIT_POLICY")==NULL)fprintf(stderr,"HINT: consider setting OMP_WAIT_POLICY=passive, which can speed up the OpenMP parallel regions considerably.\n");
+#endif
+*>
+
 SHARED ARRAY(0..nx,-nz..nz,-1..ny+1) OF DERIVS Vder=0
 
 SHARED ARRAY(-1..ny+1) OF MEANTERMS meantot=0
@@ -67,7 +79,8 @@ SHARED ARRAY(-1..ny+1) OF MKETERMS mketot=0
 S1PLANE = STRUCTURE(REAL u,v,w,pf,ux,uy,uz,vx,vy,vz,wx,wy,wz)
 SHARED ARRAY(0..2*nxd-1,0..nzd-1) OF S1PLANE PH1=0
 
-! Accumulators (used by ismp=0 only)
+! Accumulators (the accumulation loops run single-threaded; only the
+! transforms inside tophys are OpenMP-parallel)
 INTEGER npoint
 REAL cn,sU,sW,sP,spu,spv,spw
 ARRAY(1..6) OF REAL svar=0,spst=0,spsd=0,sttr=0
@@ -95,23 +108,19 @@ LOOP files FOR n=nfmin TO nfmax BY dn
   STRING pressure_name = WRITE('pField'n'.fld');  pressuredata=OPEN(pressure_name); ptot=pressuredata; CLOSE pressuredata
   STRING mask_name = WRITE("mask."n".fld"); maskimage=OPENRO(mask_name)
   IF maskimage=NULL THEN DO gmask(ix,iz,i)=1 FOR ALL ix,iz,i
-  PARALLEL LOOP FOR ismp=0 TO nsmp-1
-    LOOP FOR iy=-1 TO ny+1
-      IF ismp=0 AND maskimage#NULL THEN gmask(*,*,1)=maskimage(iy,*,*)
-      preparemeanphys(iy)
-      IF ismp=0 THEN
-        npoint=0; sU=0; sW=0; sP=0
-        LOOP FOR ix=0 TO 2*nxd-1 AND iz=0 TO nzd-1
-          IF gmask(ix,iz,1)>0.5 THEN
-            q=PH1(ix,iz); sU=~+q.u; sW=~+q.w; sP=~+q.pf; INC npoint
-          END IF
-        REPEAT
-        IF npoint>0 THEN
-          cn=1.0/npoint
-          WITH meantot(iy): U=~+sU*cn; W=~+sW*cn; P=~+sP*cn
-        END IF
+  LOOP FOR iy=-1 TO ny+1
+    IF maskimage#NULL THEN gmask(*,*,1)=maskimage(iy,*,*)
+    preparemeanphys(iy)
+    npoint=0; sU=0; sW=0; sP=0
+    LOOP FOR ix=0 TO 2*nxd-1 AND iz=0 TO nzd-1
+      IF gmask(ix,iz,1)>0.5 THEN
+        q=PH1(ix,iz); sU=~+q.u; sW=~+q.w; sP=~+q.pf; INC npoint
       END IF
     REPEAT
+    IF npoint>0 THEN
+      cn=1.0/npoint
+      WITH meantot(iy): U=~+sU*cn; W=~+sW*cn; P=~+sP*cn
+    END IF
   REPEAT
   IF maskimage#NULL THEN CLOSE(maskimage)
 REPEAT files
@@ -134,40 +143,36 @@ LOOP fields FOR n=nfmin TO nfmax BY dn
   ! Point-by-point accumulation of the statistics in physical space; points
   ! inside a particle are skipped and the averages are renormalized by the
   ! number npoint of accumulated fluid points.
-  PARALLEL LOOP FOR ismp=0 TO nsmp-1
-    LOOP FOR iy=-1 TO ny+1
-      IF ismp=0 AND maskimage#NULL THEN gmask(*,*,1)=maskimage(iy,*,*)
-      preparefullphys(iy)
-      IF ismp=0 THEN
-        npoint=0; svar=0; spst=0; spsd=0; sttr=0; spu=0; spv=0; spw=0
-        LOOP FOR ix=0 TO 2*nxd-1 AND iz=0 TO nzd-1
-          IF gmask(ix,iz,1)>0.5 THEN
-            q=PH1(ix,iz)
-            svar(1)=~+q.u*q.u; svar(2)=~+q.v*q.v; svar(3)=~+q.w*q.w
-            svar(4)=~+q.u*q.v; svar(5)=~+q.u*q.w; svar(6)=~+q.v*q.w
-            spu=~+q.u*q.pf; spv=~+q.v*q.pf; spw=~+q.w*q.pf
-            spst(1)=~+2*q.ux*q.pf; spst(2)=~+2*q.vy*q.pf; spst(3)=~+2*q.wz*q.pf
-            spst(4)=~+[q.uy+q.vx]*q.pf; spst(5)=~+[q.uz+q.wx]*q.pf; spst(6)=~+[q.vz+q.wy]*q.pf
-            spsd(1)=~+q.ux*q.ux+q.uy*q.uy+q.uz*q.uz
-            spsd(2)=~+q.vx*q.vx+q.vy*q.vy+q.vz*q.vz
-            spsd(3)=~+q.wx*q.wx+q.wy*q.wy+q.wz*q.wz
-            spsd(4)=~+q.ux*q.vx+q.uy*q.vy+q.uz*q.vz
-            spsd(5)=~+q.ux*q.wx+q.uy*q.wy+q.uz*q.wz
-            spsd(6)=~+q.vx*q.wx+q.vy*q.wy+q.vz*q.wz
-            sttr(1)=~+q.v*q.u*q.u; sttr(2)=~+q.v*q.v*q.v; sttr(3)=~+q.v*q.w*q.w
-            sttr(4)=~+q.u*q.v*q.v; sttr(5)=~+q.u*q.v*q.w; sttr(6)=~+q.v*q.v*q.w
-            INC npoint
-          END IF
-        REPEAT
-        IF npoint>0 THEN
-          cn=1.0/npoint
-          DO WITH uiujtot(iy):
-            var(i)=~+svar(i)*cn; pstrain(i)=~+spst(i)*cn; psdiss(i)=~+2*ni*spsd(i)*cn; PHIttrsp(i)=~-sttr(i)*cn
-          FOR i=1 TO 6
-          WITH uiujtot(iy): PHIptrsp(2)=~-2*spv*cn; PHIptrsp(4)=~-spu*cn; PHIptrsp(6)=~-spw*cn
-        END IF
+  LOOP FOR iy=-1 TO ny+1
+    IF maskimage#NULL THEN gmask(*,*,1)=maskimage(iy,*,*)
+    preparefullphys(iy)
+    npoint=0; svar=0; spst=0; spsd=0; sttr=0; spu=0; spv=0; spw=0
+    LOOP FOR ix=0 TO 2*nxd-1 AND iz=0 TO nzd-1
+      IF gmask(ix,iz,1)>0.5 THEN
+        q=PH1(ix,iz)
+        svar(1)=~+q.u*q.u; svar(2)=~+q.v*q.v; svar(3)=~+q.w*q.w
+        svar(4)=~+q.u*q.v; svar(5)=~+q.u*q.w; svar(6)=~+q.v*q.w
+        spu=~+q.u*q.pf; spv=~+q.v*q.pf; spw=~+q.w*q.pf
+        spst(1)=~+2*q.ux*q.pf; spst(2)=~+2*q.vy*q.pf; spst(3)=~+2*q.wz*q.pf
+        spst(4)=~+[q.uy+q.vx]*q.pf; spst(5)=~+[q.uz+q.wx]*q.pf; spst(6)=~+[q.vz+q.wy]*q.pf
+        spsd(1)=~+q.ux*q.ux+q.uy*q.uy+q.uz*q.uz
+        spsd(2)=~+q.vx*q.vx+q.vy*q.vy+q.vz*q.vz
+        spsd(3)=~+q.wx*q.wx+q.wy*q.wy+q.wz*q.wz
+        spsd(4)=~+q.ux*q.vx+q.uy*q.vy+q.uz*q.vz
+        spsd(5)=~+q.ux*q.wx+q.uy*q.wy+q.uz*q.wz
+        spsd(6)=~+q.vx*q.wx+q.vy*q.wy+q.vz*q.wz
+        sttr(1)=~+q.v*q.u*q.u; sttr(2)=~+q.v*q.v*q.v; sttr(3)=~+q.v*q.w*q.w
+        sttr(4)=~+q.u*q.v*q.v; sttr(5)=~+q.u*q.v*q.w; sttr(6)=~+q.v*q.v*q.w
+        INC npoint
       END IF
     REPEAT
+    IF npoint>0 THEN
+      cn=1.0/npoint
+      DO WITH uiujtot(iy):
+        var(i)=~+svar(i)*cn; pstrain(i)=~+spst(i)*cn; psdiss(i)=~+2*ni*spsd(i)*cn; PHIttrsp(i)=~-sttr(i)*cn
+      FOR i=1 TO 6
+      WITH uiujtot(iy): PHIptrsp(2)=~-2*spv*cn; PHIptrsp(4)=~-spu*cn; PHIptrsp(6)=~-spw*cn
+    END IF
   REPEAT
   IF maskimage#NULL THEN CLOSE(maskimage)
 REPEAT fields

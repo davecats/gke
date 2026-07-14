@@ -14,11 +14,13 @@
 !   it stay unchanged.                                                !
 ! - Data is staged through a contiguous scratch buffer, so input and  !
 !   output arrays may have any stride. Plans are cached per (kind,    !
-!   size) with FFTW_ESTIMATE. The cache is per process: CPL PARALLEL  !
-!   LOOPs fork, hence no locking is needed.                           !
+!   size) with FFTW_ESTIMATE. Scratch buffer and plan cache are       !
+!   per-thread, so transforms may be issued concurrently from OpenMP  !
+!   threads as well as from fork()-based CPL PARALLEL LOOPs.          !
 
 USE complex
 #include "fftw3.h"
+#include <pthread.h>
 #link "-lfftw3 -lm"
 
 SUBROUTINE FFTSETUP(INTEGER N) FOLLOWS
@@ -49,69 +51,78 @@ BOOLEAN FUNCTION FFTfit(INTEGER VARIABLE N)
 END FFTfit
 
 C SECTION
-/* ---- FFTW backend: contiguous scratch buffer and plan cache ---- */
-double *cplfftw_buf=NULL;
-size_t cplfftw_cap=0;
-void cplfftw_ensure(size_t nd){
-  if(nd>cplfftw_cap){
-    if(cplfftw_buf!=NULL) fftw_free(cplfftw_buf);
-    cplfftw_buf=(double *)fftw_malloc(nd*sizeof(double));
-    cplfftw_cap=nd;
+/* ---- FFTW backend: per-thread scratch buffer and plan cache ---- */
+/* The scratch buffer and the plan cache are per-thread (__thread), so that
+   transforms may be issued concurrently by OpenMP threads; plan creation
+   enters the (non-thread-safe) FFTW planner under a mutex. Both remain
+   compatible with the fork()-based CPL PARALLEL LOOPs. The __thread state
+   lives in function-local statics because file-scope identifiers of a
+   C SECTION are re-declared extern in using programs.                    */
+pthread_mutex_t cplfftw_planlock=PTHREAD_MUTEX_INITIALIZER;
+double *cplfftw_getbuf(size_t nd){
+  static __thread double *buf=NULL;
+  static __thread size_t cap=0;
+  if(nd>cap){
+    if(buf!=NULL) fftw_free(buf);
+    buf=(double *)fftw_malloc(nd*sizeof(double));
+    cap=nd;
   }
+  return buf;
 }
 struct cplfftw_node{int kind; int n; fftw_plan p; struct cplfftw_node *next;};
-struct cplfftw_node *cplfftw_cache=NULL;
 /* kind: 0=c2c backward, 1=c2c forward, 2=c2r of size 2n, 3=r2c of size 2n */
-fftw_plan cplfftw_plan(int kind, int n){
+fftw_plan cplfftw_plan(int kind, int n, double *buf){
+  static __thread struct cplfftw_node *cache=NULL;
   struct cplfftw_node *q;
-  for(q=cplfftw_cache; q!=NULL; q=q->next){ if(q->kind==kind && q->n==n) return q->p; }
+  for(q=cache; q!=NULL; q=q->next){ if(q->kind==kind && q->n==n) return q->p; }
   q=(struct cplfftw_node *)malloc(sizeof(struct cplfftw_node));
   q->kind=kind; q->n=n;
-  cplfftw_ensure(kind>=2 ? (size_t)(2*n+2) : (size_t)(2*n));
-  if(kind==0) q->p=fftw_plan_dft_1d(n,(fftw_complex *)cplfftw_buf,(fftw_complex *)cplfftw_buf,FFTW_BACKWARD,FFTW_ESTIMATE);
-  else if(kind==1) q->p=fftw_plan_dft_1d(n,(fftw_complex *)cplfftw_buf,(fftw_complex *)cplfftw_buf,FFTW_FORWARD,FFTW_ESTIMATE);
-  else if(kind==2) q->p=fftw_plan_dft_c2r_1d(2*n,(fftw_complex *)cplfftw_buf,(double *)cplfftw_buf,FFTW_ESTIMATE);
-  else q->p=fftw_plan_dft_r2c_1d(2*n,(double *)cplfftw_buf,(fftw_complex *)cplfftw_buf,FFTW_ESTIMATE);
-  q->next=cplfftw_cache; cplfftw_cache=q;
+  pthread_mutex_lock(&cplfftw_planlock);
+  if(kind==0) q->p=fftw_plan_dft_1d(n,(fftw_complex *)buf,(fftw_complex *)buf,FFTW_BACKWARD,FFTW_ESTIMATE);
+  else if(kind==1) q->p=fftw_plan_dft_1d(n,(fftw_complex *)buf,(fftw_complex *)buf,FFTW_FORWARD,FFTW_ESTIMATE);
+  else if(kind==2) q->p=fftw_plan_dft_c2r_1d(2*n,(fftw_complex *)buf,(double *)buf,FFTW_ESTIMATE);
+  else q->p=fftw_plan_dft_r2c_1d(2*n,(double *)buf,(fftw_complex *)buf,FFTW_ESTIMATE);
+  pthread_mutex_unlock(&cplfftw_planlock);
+  q->next=cache; cache=q;
   return q->p;
 }
 /* IFT (fwd=0): out(i) = SUM in(j)*exp(+2*pi*I*i*j/n)                  */
 /* FFT (fwd=1): out(j) = SUM in(i)*exp(-2*pi*I*i*j/n) / n              */
 void cplfftw_c2c(int fwd, int n, char *in, ssize_t istr, char *out, ssize_t ostr){
   int j; double *s; double ninv;
-  fftw_plan p=cplfftw_plan(fwd,n);
-  cplfftw_ensure((size_t)(2*n));
-  for(j=0;j<n;j++){ s=(double *)(in+j*istr); cplfftw_buf[2*j]=s[0]; cplfftw_buf[2*j+1]=s[1]; }
-  fftw_execute_dft(p,(fftw_complex *)cplfftw_buf,(fftw_complex *)cplfftw_buf);
+  double *buf=cplfftw_getbuf((size_t)(2*n));
+  fftw_plan p=cplfftw_plan(fwd,n,buf);
+  for(j=0;j<n;j++){ s=(double *)(in+j*istr); buf[2*j]=s[0]; buf[2*j+1]=s[1]; }
+  fftw_execute_dft(p,(fftw_complex *)buf,(fftw_complex *)buf);
   ninv=(fwd!=0 ? 1.0/n : 1.0);
-  for(j=0;j<n;j++){ s=(double *)(out+j*ostr); s[0]=ninv*cplfftw_buf[2*j]; s[1]=ninv*cplfftw_buf[2*j+1]; }
+  for(j=0;j<n;j++){ s=(double *)(out+j*ostr); s[0]=ninv*buf[2*j]; s[1]=ninv*buf[2*j+1]; }
 }
 /* RFT: N complex Fourier coefficients -> 2N packed real samples,        */
 /* r(k) = c(0).REAL + 2*SUM_{j=1}^{N-1} REAL[c(j)*exp(+2*pi*I*j*k/(2N))]  */
 void cplfftw_rft(int len, char *in, ssize_t istr, char *out, ssize_t ostr){
   int N=len&(~1); int j; double *s;
-  fftw_plan p=cplfftw_plan(2,N);
-  cplfftw_ensure((size_t)(2*N+2));
+  double *buf=cplfftw_getbuf((size_t)(2*N+2));
+  fftw_plan p=cplfftw_plan(2,N,buf);
   s=(double *)in;
-  cplfftw_buf[0]=s[0]; cplfftw_buf[1]=0.0;
-  for(j=1;j<N;j++){ s=(double *)(in+j*istr); cplfftw_buf[2*j]=s[0]; cplfftw_buf[2*j+1]=s[1]; }
-  if((len&1)!=0){ s=(double *)(in+(ssize_t)N*istr); cplfftw_buf[2*N]=s[0]; } else cplfftw_buf[2*N]=0.0;
-  cplfftw_buf[2*N+1]=0.0;
-  fftw_execute_dft_c2r(p,(fftw_complex *)cplfftw_buf,(double *)cplfftw_buf);
-  for(j=0;j<N;j++){ s=(double *)(out+j*ostr); s[0]=cplfftw_buf[2*j]; s[1]=cplfftw_buf[2*j+1]; }
+  buf[0]=s[0]; buf[1]=0.0;
+  for(j=1;j<N;j++){ s=(double *)(in+j*istr); buf[2*j]=s[0]; buf[2*j+1]=s[1]; }
+  if((len&1)!=0){ s=(double *)(in+(ssize_t)N*istr); buf[2*N]=s[0]; } else buf[2*N]=0.0;
+  buf[2*N+1]=0.0;
+  fftw_execute_dft_c2r(p,(fftw_complex *)buf,(double *)buf);
+  for(j=0;j<N;j++){ s=(double *)(out+j*ostr); s[0]=buf[2*j]; s[1]=buf[2*j+1]; }
 }
 /* HFT: 2N packed real samples -> N complex Fourier coefficients (inverse of RFT) */
 void cplfftw_hft(int len, char *in, ssize_t istr, char *out, ssize_t ostr){
   int N=len&(~1); int j; double *s; double n2inv;
-  fftw_plan p=cplfftw_plan(3,N);
-  cplfftw_ensure((size_t)(2*N+2));
-  for(j=0;j<N;j++){ s=(double *)(in+j*istr); cplfftw_buf[2*j]=s[0]; cplfftw_buf[2*j+1]=s[1]; }
-  cplfftw_buf[2*N]=0.0; cplfftw_buf[2*N+1]=0.0;
-  fftw_execute_dft_r2c(p,(double *)cplfftw_buf,(fftw_complex *)cplfftw_buf);
+  double *buf=cplfftw_getbuf((size_t)(2*N+2));
+  fftw_plan p=cplfftw_plan(3,N,buf);
+  for(j=0;j<N;j++){ s=(double *)(in+j*istr); buf[2*j]=s[0]; buf[2*j+1]=s[1]; }
+  buf[2*N]=0.0; buf[2*N+1]=0.0;
+  fftw_execute_dft_r2c(p,(double *)buf,(fftw_complex *)buf);
   n2inv=0.5/N;
-  for(j=1;j<N;j++){ s=(double *)(out+j*ostr); s[0]=n2inv*cplfftw_buf[2*j]; s[1]=n2inv*cplfftw_buf[2*j+1]; }
-  s=(double *)out; s[0]=n2inv*cplfftw_buf[0]; s[1]=0.0;
-  if((len&1)!=0){ s=(double *)(out+(ssize_t)N*ostr); s[0]=n2inv*cplfftw_buf[2*N]; s[1]=0.0; }
+  for(j=1;j<N;j++){ s=(double *)(out+j*ostr); s[0]=n2inv*buf[2*j]; s[1]=n2inv*buf[2*j+1]; }
+  s=(double *)out; s[0]=n2inv*buf[0]; s[1]=0.0;
+  if((len&1)!=0){ s=(double *)(out+(ssize_t)N*ostr); s[0]=n2inv*buf[2*N]; s[1]=0.0; }
 }
 END C SECTION
 

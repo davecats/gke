@@ -247,19 +247,21 @@ POINTER TO STORED ARRAY(-1..ny+1,0..2*nxd-1,0..nzd-1) OF REAL maskimage
 
 ! Transform one spectral plane f to physical space into g
 ! m=0: value; m=1: x-derivative; m=2: z-derivative
+! The two stages are threaded by the OpenMP pragmas below (ignored unless
+! compiled with -fopenmp).
 SUBROUTINE tophys(ARRAY(*,*) OF COMPLEX f; INTEGER m; POINTER TO ARRAY(*,*) OF REAL g)
-  LOOP FOR ix=ismp*(nx+1) DIV nsmp TO (ismp+1)*(nx+1) DIV nsmp -1
+#pragma omp parallel for
+  LOOP FOR ix=0 TO nx
     DO scrp(ix,izdV(iz))=[IF m=1 THEN I*alfa0*ix*f(ix,iz) ELSE IF m=2 THEN I*beta0*iz*f(ix,iz) ELSE f(ix,iz)] FOR iz=-nz TO nz
     scrp(ix,nz+1..nzd-nz-1)=0
     IFT(scrp(ix,*))
   REPEAT LOOP
-  IF ismp=0 THEN scrp(nx+1..nxd-1)=0
-  SYNC(ismp,nsmp)
-  DO
+  scrp(nx+1..nxd-1)=0
+#pragma omp parallel for
+  LOOP FOR iz=0 TO nzd-1
     RFT(scrp(*,iz))
     DO g(ix,iz)=scrp(*,iz).REALIFIED(ix) FOR ix=0 TO 2*nxd-1
-  FOR iz=ismp*nzd DIV nsmp TO (ismp+1)*nzd DIV nsmp -1
-  SYNC(ismp,nsmp)
+  REPEAT LOOP
 END tophys
 
 ! Prepare all physical fields of plane i (fluctuations and x/z derivatives)
