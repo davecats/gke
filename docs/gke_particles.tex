@@ -1,0 +1,323 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+
+\newcommand{\avg}[1]{\left\langle #1 \right\rangle}
+\newcommand{\du}{\delta u}
+\newcommand{\vect}[1]{\boldsymbol{#1}}
+
+\title{The generalized Kolmogorov equation in particle-resolved channel flow:\\
+status of the code and plan for a consistent treatment of the particles}
+\author{GKE code, branch \texttt{dev\_xinju}}
+\date{October 2026}
+
+\begin{document}
+\maketitle
+
+\section{Purpose}
+
+The branch \texttt{dev\_xinju} of the GKE code computes the generalized
+Kolmogorov equation (GKE) of the particle-resolved channel-flow simulations of
+X.~Jiang (the ``xinju dataset''), with the averages restricted to pairs of
+fluid points. This document summarizes what is computed today, why the
+resulting budget is not yet closed, and how the action of the particles on the
+fluid can be included consistently. It is meant as the working plan for the
+next development steps.
+
+\section{The flow solver and the stored data}
+\label{sec:solver}
+
+The simulations follow the numerical method described in Appendix~A of
+Jiang, Xu \& Zhao (2024). The fluid obeys the incompressible Navier--Stokes
+equations in non-conservative form, extended to the whole computational box by
+the immersed-boundary (IB) force $\tilde{\vect f}$, which has the units of an
+acceleration:
+\begin{equation}
+  \nabla\cdot\tilde{\vect u}=0,\qquad
+  \frac{\partial\tilde{\vect u}}{\partial t}+\tilde{\vect u}\cdot\nabla\tilde{\vect u}
+  =-\nabla\tilde p+\nu\nabla^2\tilde{\vect u}+\tilde{\vect f}.
+  \label{eq:ns}
+\end{equation}
+Tildes denote total quantities, and the density is absorbed into $\tilde p$. The
+discretization uses second-order central finite differences on a uniform
+staggered grid ($\Delta x=\Delta y=\Delta z=\Delta h$) and a fractional-step
+method. A first prediction $\vect u^*$ is computed with Crank--Nicolson for the
+viscous term and without the IB force. The IB force is then added,
+$\vect u^{**}=\vect u^*+\Delta t\,\vect f^{n+1/2}$, followed by the projection
+that updates pressure and velocity. The IB force is computed by direct forcing
+on Lagrangian markers that are retracted by $0.3\Delta h$ inside the particle
+surface, with two multi-forcing iterations. It is spread to the Eulerian grid
+with the three-cell regularized delta function of Roma, Peskin \& Berger
+(1999), whose support is $3\Delta h$ centred on the markers.
+
+The following properties of the stored snapshots were verified on the
+snapshot $n=20000$ ($480\times160\times240$ cells, $\Delta h=0.0125$, solid
+volume fraction about $0.30$):
+\begin{itemize}[itemsep=1pt]
+\item each MPI-rank file stores the 11 variables $u,v,w,f^\mathrm{turb}_{x,y,z},
+  f^\mathrm{IB}_{x,y,z},p,\phi$ as consecutive blocks (Fortran order);
+  $f^\mathrm{turb}\equiv0$;
+\item the discrete divergence of the staggered velocity vanishes to round-off
+  ($\approx10^{-14}$) everywhere, inside the particles too, as expected
+  from~\eqref{eq:ns};
+\item the level set $\phi$ is negative in the solid and positive in the fluid,
+  but it is not a distance: $|\nabla\phi|\approx10$ near the surface, and it
+  saturates at $0.3$ in the fluid;
+\item $\tilde{\vect f}$ is concentrated in a layer about two cells wide on
+  the fluid side and three cells wide on the solid side of the surface, as the
+  marker retraction and the kernel support imply. Further away it is small:
+  rms between $10^{-3}$ and $10^{-2}$, against about $1.5$ in the layer.
+\end{itemize}
+The conversion script \texttt{convert\_h5.py} distributed with the data
+reshapes the rank files with the variable as the fastest index, so its HDF5
+output is scrambled. The GKE code reads the rank files directly and is not
+affected.
+
+\section{What the code computes today}
+\label{sec:current}
+
+Fluctuations are defined with respect to the mean velocity $(U,V,W)(y)$ and
+pressure $P(y)$ of the fluid phase, i.e.\ averaged over the fluid points of
+each wall-parallel plane and over the snapshots. For two points
+$\vect x_1=\vect X-\vect r/2$ and $\vect x_2=\vect X+\vect r/2$ we write
+$\du_i=u_i(\vect x_2)-u_i(\vect x_1)$, $u^*_i=[u_i(\vect x_1)+u_i(\vect x_2)]/2$,
+$q=\du_i\du_i$, and analogously $\delta U_i$, $V^*$ and $(\cdot)^*$ for the
+mean quantities. Every average $\avg{\cdot}$ is taken over pairs of fluid
+points only and renormalized by the number of such pairs. With
+$\varepsilon=\nu\avg{\partial_k u_i\partial_k u_i}$ the pseudo-dissipation,
+the code evaluates
+\begin{align}
+  \Phi_{r_k}&=\avg{\du_k q}+\delta U_k\avg{q}-2\nu\frac{\partial\avg{q}}{\partial r_k},
+  \label{eq:phir}\\
+  \Phi_Y&=\avg{v^*q}+V^*\avg{q}+2\avg{\delta p\,\du_2}-\frac{\nu}{2}\frac{\partial\avg{q}}{\partial Y},
+  \label{eq:phic}\\
+  \xi&=-2\avg{\du_i\du_2}\Big(\frac{dU_i}{dy}\Big)^*
+       -2\avg{\du_i v^*}\,\delta\Big(\frac{dU_i}{dy}\Big)-4\varepsilon^*,
+  \label{eq:xi}
+\end{align}
+which make up the single-phase GKE
+$\partial_t\avg{q}+\nabla_{\vect r}\cdot\vect\Phi_{\vect r}+\partial_Y\Phi_Y=\xi$
+(Hill 2002; Marati, Casciola \& Piva 2004; Gatti et al.\ 2019). In
+\texttt{gke.bin} they are stored as \texttt{phiR}, \texttt{phiC},
+\texttt{scaleENER}$=\avg{q}$ and \texttt{scalePROD}$=\xi$. The pair sums are
+evaluated exactly with FFT cross-correlations of mask-weighted fields
+(\texttt{step2\_gke}). The direct pair accumulation \texttt{step2\_gke\_direct}
+serves as reference, and the two agree to round-off.
+
+\paragraph{Why this budget is not closed.} Equations
+\eqref{eq:phir}--\eqref{eq:xi} are the GKE of a single-phase flow. Restricted
+to fluid pairs, they miss:
+\begin{enumerate}[label=(\alph*),itemsep=1pt]
+\item the IB force, i.e.\ the source $2\avg{\du_i\,\delta f_i}$, which is
+  active in the forcing layer, partly inside the fluid;
+\item the interface terms. The pair indicator does not commute with the
+  derivatives in $\vect r$, $Y$ and $t$, which produces fluxes through the
+  particle surfaces (section~\ref{sec:fluid});
+\item the effect of the normalization. The fraction of fluid pairs depends on
+  $(\vect r,Y)$ (the solid fraction ranges from about $1\%$ at the walls to
+  $50\%$ at the centre), so derivatives of renormalized averages contain
+  gradients of that fraction;
+\item the conditional-mean terms. Over fluid pairs, $\avg{\du_i}$ and
+  $\avg{\delta p}$ do not vanish, so terms such as
+  $-2\avg{\delta p}\,\delta(dV/dy)$ and the products of $\avg{\du_i}$ with
+  the mean-momentum terms survive. These are neglected at present.
+\end{enumerate}
+Items (b)--(d) disappear for unmasked averages, and item (a) is then the only
+missing term. This motivates the two-stage plan below.
+
+\section{Formulation A: whole-domain GKE with the IB force}
+\label{sec:whole}
+
+Since~\eqref{eq:ns} holds at every grid point, the GKE of the whole-domain
+field is exact once the IB force is included. With averages over all points
+(fluid and solid), Reynolds decomposition
+$\tilde{\vect u}=\vect U(y)+\vect u$, $\tilde p=P(y)+p$,
+$\tilde{\vect f}=\vect F(y)+\vect f$, and the usual steps, one obtains
+\begin{equation}
+  \frac{\partial\avg{q}}{\partial t}+\nabla_{\vect r}\cdot\vect\Phi_{\vect r}
+  +\frac{\partial\Phi_Y}{\partial Y}=\xi+\Pi_f,\qquad
+  \Pi_f=2\avg{\du_i\,\delta f_i},
+  \label{eq:gkef}
+\end{equation}
+with the fluxes and the source of~\eqref{eq:phir}--\eqref{eq:xi}. Continuity
+and the walls imply $V\equiv0$ for whole-domain averages; uniform forces (the
+driving pressure gradient, the buoyancy-corrected weight) cancel in the
+increments. The single-point budgets gain
+$\avg{u_if_j}+\avg{u_jf_i}$, and the mean momentum balance reads
+\begin{equation}
+  \frac{d}{dy}\Big(\nu\frac{dU}{dy}-\avg{uv}\Big)+\Pi+F_x=0,
+  \label{eq:mean}
+\end{equation}
+where $\Pi$ is the (uniform) driving pressure gradient and $F_x$ the mean IB
+force, i.e.\ the mean particle drag per unit mass.
+
+\paragraph{Interpretation.} $\Pi_f(\vect r,Y)$ distributes the energy
+exchange between particles and fluid over scales and positions. At large
+separations it tends to the sum of the single-point exchanges at the two
+points, $2\avg{u_if_i}_1+2\avg{u_if_i}_2$. The price is that the averages
+include the solid interior, where $\tilde{\vect u}$ is (approximately) the
+rigid-body motion, so the statistics describe the fluid--particle mixture
+rather than the fluid alone.
+
+\paragraph{Changes to the code.}
+\begin{itemize}[itemsep=1pt]
+\item \texttt{dataset.cpl}: read $f^\mathrm{IB}$ (variables 7--9), staggered
+  like the velocity, and interpolate it to the cell centres.
+\item \texttt{gke.in}: option to switch the masking off (and, for
+  section~\ref{sec:fluid}, to choose the mask of each point and the
+  definition of the mean).
+\item Step 1: mean force $\vect F(y)$, correlations $\avg{u_if_j}$ (new field
+  of \texttt{BALANCE}).
+\item Step 2: one more pair sum $\sum\du_i\,\delta f_i$. With $\vect a$ the
+  velocity fluctuation it reads $P(1,\vect a\cdot\vect f)-\sum_iP(a_i,f_i)$
+  in the notation of \texttt{step2\_gke.cpl}, i.e.\ four more spectra (about
+  $0.6$\,GiB for the xinju grid). New fields of \texttt{GKETERMS}: $\Pi_f$,
+  and the fraction of accumulated pairs, which is needed in
+  section~\ref{sec:fluid}.
+\end{itemize}
+
+\section{Formulation B: fluid-phase GKE with interface terms}
+\label{sec:fluid}
+
+Let $m(\vect x,t)$ be the fluid indicator and
+$\chi=m(\vect x_1,t)\,m(\vect x_2,t)$ the pair indicator. Write the exact pair
+equation in pair space $(\vect X,\vect r)$ as
+$\partial_tq+\nabla\cdot\vect J=s$. Here $\vect J$ collects the advective,
+pressure and viscous fluxes and $s$ the production, dissipation and forcing.
+Multiplying by $\chi$ and averaging gives the budget of the phase-weighted
+quantity $\avg{\chi q}$ (averages over \emph{all} pairs):
+\begin{equation}
+  \partial_t\avg{\chi q}+\nabla\cdot\avg{\chi\vect J}=\avg{\chi s}+I,\qquad
+  I=\avg{q\,\partial_t\chi+\vect J\cdot\nabla\chi}.
+  \label{eq:phase}
+\end{equation}
+The particle surfaces move with the rigid-body velocity $\vect u_\Gamma$,
+$\partial_tm+\vect u_\Gamma\cdot\nabla m=0$, and no-slip gives
+$\tilde{\vect u}=\vect u_\Gamma$ there. The temporal and advective parts of $I$
+therefore cancel, and $I$ reduces to the pressure and viscous pair fluxes
+through the particle surfaces. These are weighted by the other point of the
+pair being in the fluid, since $\nabla m=\vect n\,\delta_\Gamma$, with
+$\vect n$ the normal pointing into the fluid.
+
+In the IB discretization the surface stresses are not sharp. They are
+represented by $\tilde{\vect f}$ in the forcing layer, which straddles the
+surface. Hence $I$ and the forcing contribution $\avg{\chi\,2\du_i\delta f_i}$
+cannot be separated meaningfully and should be reported together, as the
+\emph{fluid--particle exchange} of the fluid-phase budget.
+
+\paragraph{Computation through a decomposition into pair classes.} No surface
+integrals are needed. With $m_\mathrm{f}=m$ and $m_\mathrm{s}=1-m$, the four
+pair classes
+$\chi_{ab}=m_a(\vect x_1)m_b(\vect x_2)$, $a,b\in\{\mathrm{f},\mathrm{s}\}$,
+add up to one. Their phase-weighted budgets~\eqref{eq:phase} therefore add up
+to the closed whole-domain budget~\eqref{eq:gkef}, and their interface terms
+$I_{ab}$ are exchanges between classes that sum to zero. Every term of every
+class is computed with the existing FFT machinery, by choosing the mask of
+each of the two points. The fluid--particle exchange of the fluid--fluid
+class follows as the residual of its budget. This assumes statistical
+stationarity, i.e.\ enough snapshots for $\partial_t\avg{\chi q}$ to vanish.
+
+\paragraph{Choices to be made.}
+\begin{itemize}[itemsep=1pt]
+\item \emph{Reference mean.} The classes add up only if all of them use the
+  same fluctuations. The whole-domain means ($V\equiv0$) are the natural
+  choice. Fluid-phase means can still be used for presentation, at the price
+  of the conditional-mean terms of item~(d).
+\item \emph{Normalization.} The budget is formulated for $\avg{\chi q}$.
+  Renormalized averages $\avg{q}_\chi=\avg{\chi q}/\avg{\chi}$ are obtained
+  by dividing only at the end. Their budget follows from the quotient rule
+  and contains $\nabla\avg{\chi}$. The pair fraction $\avg{\chi}(\vect r,Y)$
+  must therefore be stored.
+\end{itemize}
+
+\section{Numerical consistency and validation}
+\label{sec:validation}
+
+Closure tests are the core of the validation. Expected residuals stem from:
+\begin{itemize}[itemsep=1pt]
+\item \emph{time levels}: the fractional step stores fields at different time
+  levels (e.g.\ $\vect u^{n+1}$, $p^{n+1/2}$, $\vect f^{n+1/2}$), an
+  $O(\Delta t)$ inconsistency, small at the CFL numbers used;
+\item \emph{spatial discretization}: the GKE code evaluates derivatives with
+  second-order finite differences of the cell-centred fields. The diagonal
+  derivatives use the solver's own differences across the cell faces, so the
+  discrete divergence vanishes, but discrete product rules hold only up to
+  $O(\Delta h^2)$. Near the surfaces the fields are only continuous, so
+  larger local errors are expected there;
+\item \emph{statistics}: the time derivative vanishes only on average.
+\end{itemize}
+The suggested sequence is:
+\begin{enumerate}[itemsep=1pt]
+\item \emph{Mean momentum}~\eqref{eq:mean}: the driving gradient $\Pi$
+  obtained as residual must be independent of $y$. This tests the sign,
+  units and staggering of $\tilde{\vect f}$ with almost no effort.
+\item \emph{Single-point energy budget} (whole domain): the residual of the
+  budget of $\avg{u_iu_i}$, including $2\avg{u_if_i}$, must be small compared
+  with its largest terms.
+\item \emph{GKE~\eqref{eq:gkef}}: a post-processing script evaluating
+  $\nabla_{\vect r}\cdot\vect\Phi_{\vect r}$ on the undersampled separations
+  and $\partial_Y\Phi_Y$, and the residual map in $(\vect r,Y)$.
+\item \emph{Pair classes}: the four class budgets must add up to the
+  whole-domain one to round-off. The fluid--fluid residual gives the
+  fluid--particle exchange.
+\end{enumerate}
+
+\section{Implementation steps}
+
+\begin{enumerate}[itemsep=1pt]
+\item Read $f^\mathrm{IB}$; masking switch in \texttt{gke.in}; mean
+  momentum check (validation step 1).
+\item Force terms in steps 1 and 2; new fields of \texttt{BALANCE} and
+  \texttt{GKETERMS} (pair fraction included); single-point closure check.
+\item Post-processing script for the GKE closure; validation on the synthetic
+  test case (with a synthetic force field) and on the xinju dataset.
+\item Per-point masks (fluid, solid, all) and the whole-domain reference mean
+  as options; class decomposition and fluid--fluid exchange.
+\item Falling particles. With walls normal to gravity nothing changes
+  structurally, but the fluid-phase mean $V(y)$ is non-zero (already
+  supported). If the flow is periodic in all directions, as in Jiang et al.\
+  (2024), the statistics are homogeneous: the GKE depends on $\vect r$ only,
+  and the wall-normal grid, the mirror symmetry and step~3 have to be replaced
+  by a fully periodic variant.
+\end{enumerate}
+
+\section{Open questions for the data provider}
+
+\begin{enumerate}[itemsep=1pt]
+\item Time levels of the stored $\vect u$, $p$ and $\vect f^\mathrm{IB}$.
+  Is $\vect f^\mathrm{IB}$ the total force of the two multi-forcing
+  iterations?
+\item Is the pressure gradient that keeps the flow rate fixed contained in
+  $p$, or applied as a separate uniform forcing? Is its value per snapshot
+  available?
+\item Definition of the level set (it is not a distance, $|\nabla\phi|\approx10$).
+  Does $\phi=0$ coincide with the particle surface or with the retracted
+  markers?
+\item Are the particle positions, velocities and angular velocities available
+  per snapshot (useful for the rigid-body checks and the solid-phase
+  statistics)? What are the particle size, the density ratio and the
+  direction of gravity in the channel cases?
+\end{enumerate}
+
+\section*{References}
+\begin{list}{}{\leftmargin=1.5em\itemindent=-1.5em\itemsep=1pt}
+\item Gatti, D. et al. 2019
+  An efficient numerical method for the generalized Kolmogorov equation.
+  \emph{J. Turbul.} \textbf{20}, 457--480.
+\item Hill, R.J. 2002 Exact second-order structure-function relationships.
+  \emph{J. Fluid Mech.} \textbf{468}, 317--326.
+\item Jiang, X., Xu, C. \& Zhao, L. 2024 Prolate spheroids settling in a
+  quiescent fluid: clustering, microstructures and collisions. \emph{J. Fluid
+  Mech.} \textbf{1000}, A49.
+\item Marati, N., Casciola, C.M. \& Piva, R. 2004 Energy cascade and spatial
+  fluxes in wall turbulence. \emph{J. Fluid Mech.} \textbf{521}, 191--215.
+\item Roma, A.M., Peskin, C.S. \& Berger, M.J. 1999 An adaptive version of the
+  immersed boundary method. \emph{J. Comput. Phys.} \textbf{153}, 509--534.
+\end{list}
+
+\end{document}

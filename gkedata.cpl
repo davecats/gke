@@ -50,14 +50,13 @@ INLINE REAL FUNCTION setting(STRING name; INTEGER i)=nmlvalue("gke.in",name,i)
 INTEGER nfmin=ROUND(setting("nfmin",1)), nfmax=ROUND(setting("nfmax",1)), dn=ROUND(setting("dn",1))
 REAL uLx1=setting("uLx",1), uLx2=setting("uLx",2), uLz1=setting("uLz",1), uLz2=setting("uLz",2)
 INTEGER nftot=[(nfmax-nfmin) DIV dn]+1
-path="gke.bin"
 
 ! Parallel - initialization 
 ! -------------------------------------------
 INTEGER iproc,nproc
 IF COMMANDLINE.HI<1 THEN iproc=1; nproc=1 ELSE
 iproc=atoi(COMMANDLINE(1)); nproc=atoi(COMMANDLINE(2)); END IF
-first==(iproc=1); last==(iproc=nproc); has_terminal==last
+has_terminal==(iproc=nproc)
 IF has_terminal THEN
   WRITE BY NAME nproc
   WRITE BY NAME nx, ny, nz, Lx, Ly, Lz, 1/ni
@@ -98,7 +97,6 @@ STRUCTURE[ARRAY(-2..2) OF REAL d1,d2] derivs(-1..ny+1)
 DO WITH derivs(iy): fdweights(iy,2,1,d1); fdweights(iy,2,2,d2) FOR iy=-1 TO ny+1
 ARRAY(-1..ny+1,-1..1) OF REAL dy1=0
 DO fdweights(iy,1,1,dy1(iy,*)) FOR iy=-1 TO ny+1
-nyl=-1+(iproc-1)*(ny DIV 2 +2) DIV nproc; nyh=iproc*(ny DIV 2 +2) DIV nproc -2
 
 SUBROUTINE deriv2(ARRAY(*) OF REAL f0,f2^)
   DO WITH derivs(iy) f2(iy) = (SUM d2(i)*f0(iy+i+yshift(iy,2)) FOR i=-2 TO 2) FOR iy=-1 TO ny+1
@@ -119,7 +117,6 @@ INLINE REAL FUNCTION ddy(REAL f(*); INTEGER iy)=(SUM dy1(iy,i)*f(iy+i+yshift(iy,
 ! -------------------------------------------
 GKETERMS = STRUCTURE(ARRAY(1..3) OF REAL phiR; REAL phiC, scaleENER, scalePROD)
 MEANTERMS = STRUCTURE(REAL U,V,W,P,Uy,Vy,Wy,Uyy,Vyy,Wyy)
-MKETERMS = STRUCTURE(REAL pump,produv,prodvw,ttrsp,vdiff,dissU,dissW,PHIttrsp,PHIvdiff) 
 BALANCE = STRUCTURE(ARRAY(1..6) OF REAL var,prod,psdiss,ttrsp,vdiff,pstrain,ptrsp,PHIttrsp,PHIvdiff,PHIptrsp,conv)
 
 ! Single-point statistics of the two planes of a pair
@@ -130,7 +127,6 @@ ARRAY(1..2) OF BALANCE uiuj
 ! -------------------------------------------
 POINTER TO STORED STRUCTURE[
         ARRAY(-1..ny+1) OF MEANTERMS meandata
-        ARRAY(-1..ny+1) OF MKETERMS mkedata
         ARRAY(-1..ny+1) OF BALANCE uiujdata
 ] uiujimage
 
@@ -162,10 +158,12 @@ POINTER TO STORED ARRAY(0..startpos(ny DIV 2 +1)-1,0..mx-1,0..mz-1) OF GKETERMS 
 ! ------------------------------
 uiujimage=OPENRO("uiuj.bin")
 
-! Open data for output
+! Open the GKE terms gke.bin (steps 2 and 3)
 ! ------------------------------
-gkedata=OPEN(path)
-IF has_terminal THEN WRITE "Will require " SIZEOF(ARRAY(0..startpos(ny DIV 2 +1)-1,0..mx-1,0..mz-1) OF GKETERMS)/(1024.0**3) " GiB on disk..."
+SUBROUTINE opengke()
+  gkedata=OPEN("gke.bin")
+  IF has_terminal THEN WRITE "gke.bin requires " SIZEOF(ARRAY(0..startpos(ny DIV 2 +1)-1,0..mx-1,0..mz-1) OF GKETERMS)/(1024.0**3) " GiB on disk"
+END opengke
 
 ! Fields of a pair of wall-parallel planes
 ! -----------------------------------------------------------------

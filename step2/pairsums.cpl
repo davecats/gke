@@ -19,6 +19,11 @@
 !   kGZ  = SUM du_i*(d/dz u_i(x)+d/dz u_i(x+r))     (summed over i)
 !   kN   = number of pairs
 !
+! Range IY1=nyl..nyh of the lower-half planes processed by this process
+! (distributed-memory parallelization)
+nyl=-1+(iproc-1)*(ny DIV 2 +2) DIV nproc; nyh=iproc*(ny DIV 2 +2) DIV nproc -2
+opengke()
+
 kSE=1; kFX=2; kFY=3; kFZ=4; kFC=5; kUV=6; kUVS=7; kVV=8; kVVS=9; kWV=10; kWVS=11
 kGX=12; kGZ=13; kN=14; nk=14
 ARRAY(0..mx*mz-1,1..nk) OF REAL SR=0

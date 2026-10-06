@@ -46,7 +46,6 @@ USE ../gkedata
 
 ARRAY(-1..ny+1) OF MEANTERMS meantot=0
 ARRAY(-1..ny+1) OF BALANCE uiujtot=0
-ARRAY(-1..ny+1) OF MKETERMS mketot=0
 
 ! Compute the average field
 ! ------------------------------------
@@ -128,25 +127,12 @@ LOOP FOR i=1 TO 6
   DO PHIconv(iy)=-meantot(iy).V*uiujtot(iy).var(i) FOR ALL iy
   WITH uiujtot: deriv(PHIconv,conv(*,i))
 REPEAT
-! MKE budget (assumes V=0)
-DO WITH meantot(iy), uiujtot(iy), mketot(iy): produv=-0.5*prod(1); prodvw=-0.5*prod(3) FOR ALL iy
-! dissU(MKE) and dissW(MKE)
-DO WITH meantot(iy), mketot(iy): dissU=ni*Uy^2; dissW=ni*Wy^2 FOR ALL iy
-! ttrsp(MKE)
-DO WITH meantot(iy), uiujtot(iy), mketot(iy): mketot(iy).PHIttrsp=-var(4)*U-var(6)*W FOR ALL iy
-WITH mketot: deriv(PHIttrsp,ttrsp);
-! vdiff(MKE)
-DO WITH meantot(iy), mketot(iy): PHIvdiff=ni*(U*Uy+W*Wy) FOR ALL iy
-WITH mketot: deriv(PHIvdiff,vdiff);
-! pump(MKE)
-WITH mketot,meantot: pump=ni*U*0.5*(Uy(-1)-Uy(ny+1))
 
 ! Write to binary file
 ! ------------------------------------
 uiujimage = OPEN("uiuj.bin")
 WITH uiujimage:
     meandata(-1..ny+1)=meantot(-1..ny+1)
-    mkedata(-1..ny+1)=mketot(-1..ny+1)
     uiujdata(-1..ny+1)=uiujtot(-1..ny+1)
 CLOSE(uiujimage)
 

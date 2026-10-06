@@ -12,3 +12,11 @@ step1/step1_singlepoints
 step2/step2_gke
 step2/step2_gke_direct
 step3/step3_gke
+
+# LaTeX build products
+docs/*.aux
+docs/*.log
+docs/*.out
+docs/*.fls
+docs/*.fdb_latexmk
+docs/*.pdf

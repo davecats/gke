@@ -22,7 +22,7 @@ The code is written in the programming language CPL, whose compiler can be downl
 This branch computes the GKE in physical space for the particle-resolved channel DNS described in *simulation_data_description.pdf* (the "xinju dataset"): every average is taken over the fluid points only, i.e. points (single-point statistics) and pairs of points (two-point statistics) with at least one point inside a particle are excluded, and averages are renormalized by the number of accumulated points or pairs.
 
 The computation is divided in three steps, each of them provided as a separate program and run in sequence:
-1) **step 1** (*step1/step1_singlepoints.cpl*) computes the mean profiles and the single-point budgets of the Reynolds stresses, and writes them to *uiuj.bin*;
+1) **step 1** (*step1/step1_singlepoints.cpl*) computes the mean profiles and the single-point budgets of the Reynolds stresses, and writes them to *uiuj.bin* (layout in *gkedata.cpl*);
 2) **step 2** (*step2/step2_gke.cpl*) computes the GKE terms that do not involve wall-normal derivatives, reading *uiuj.bin* and writing *gke.bin*;
 3) **step 3** (*step3/step3_gke.cpl*) adds the GKE terms involving wall-normal derivatives, updating *gke.bin* in place.
 
@@ -58,7 +58,11 @@ All knowledge of the input format is confined to *dataset.cpl*, which reads one 
 * the wall-normal grid consists of the two walls and of the cell centres; at the walls the velocity vanishes and the pressure is extrapolated;
 * all derivatives are standard (explicit) second-order finite differences: dudx, dvdy and dwdz are differences of the values on the two opposite faces of each cell, so that the discrete divergence of the simulation is preserved; the other velocity derivatives are central differences in x and z and 3-point differences in y (one-sided at the walls). Only the smooth averaged profiles are differentiated in y with 5-point stencils.
 
-The mean velocity (U,V,W)(y) is fully accounted for: in particular the mean wall-normal velocity V of the fluid phase, which does not vanish in particle-laden flows, enters the fluctuations, the transport by the mean flow and the production terms. The terms describing the action of the particles on the fluid are not yet included; the open questions and the plan are collected in *doc/particles.md*.
+The mean velocity (U,V,W)(y) of the fluid phase is fully accounted for, including a non-zero mean wall-normal velocity, which arises in particle-laden flows.
+
+### Status
+
+The fluid-phase statistics are computed and validated, but the GKE budget of the particle-laden flow is not yet closed: the immersed-boundary force of the solver and the fluxes through the particle surfaces are missing. The current status, the answers of the data provider and the plan for a consistent treatment of the particles (*docs/gke_particles.tex*) are collected in *docs/README.md*.
 
 ### Compiling
 
@@ -95,10 +99,6 @@ each of the nproc independently started processes computes its own range of wall
 ### Testing
 
 `test/run_test.bash` generates a small synthetic case in the format of the xinju dataset (*test/make_testcase.py*), runs the whole pipeline with both implementations of step 2 and checks that they agree up to round-off.
-
-### Database
-
-The directory *database* constains the GKE analysis performed for turbulent channels at two different values of friction Reynolds number Retau=200 and Retau=1000. Refer to database/README.md for further information! 
 
 ### Contacts
 
