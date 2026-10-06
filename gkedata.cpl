@@ -72,43 +72,55 @@ IF has_terminal THEN
   *>
 END IF
 
-! Finite differences: wall-normal operators on the grid y (5-point stencils,
-! shifted near the walls), and second-order central differences in the
-! periodic x and z directions (dudx, dvdy and dwdz are provided by dataset.cpl)
+! Finite differences in the wall-normal direction: fdweights computes the
+! weights d(-h..h) of the m-th derivative at y(iy) on the 2h+1 grid points
+! from iy-h+yshift(iy,h), the stencil being shifted inside the domain near the
+! walls. The smooth averaged profiles (here and in step 3) are differentiated
+! with 5-point stencils (derivs), the fields point by point with 3-point
+! stencils (dy1): second-order like the central differences used in the
+! periodic x and z directions, and less extended across the surface of the
+! particles. All are standard (explicit) finite differences. dudx, dvdy and dwdz are provided by dataset.cpl.
 ! -------------------------------------------
-INLINE INTEGER FUNCTION yshift(INTEGER iy)=INTEGER((iy<1))*(-iy+1) - INTEGER((iy>(ny-1)))*(iy-ny+1)
+INLINE INTEGER FUNCTION yshift(INTEGER iy,h)=MAX(h-1-iy,0)-MAX(iy+h-ny-1,0)
+SUBROUTINE fdweights(INTEGER iy,h,m; ARRAY(*) OF REAL d^)
+  ARRAY(0..2*h,0..2*h) OF REAL A=0
+  ARRAY(0..2*h) OF REAL rhs=0
+  ! A(ir,ic) = (y(iy-h+ic+yshift(iy,h))-y(iy))^(2*h-ir)
+  LOOP FOR ic=0 TO 2*h
+    A(2*h,ic)=1
+    DO A(ir,ic)=A(ir+1,ic)*[y(iy-h+ic+yshift(iy,h))-y(iy)] FOR ir=2*h-1 TO 0 BY -1
+  REPEAT
+  LUdecomp A
+  rhs(2*h-m)=IF m=1 THEN 1 ELSE 2
+  d(-h+(*))=A\rhs
+END fdweights
 STRUCTURE[ARRAY(-2..2) OF REAL d1,d2] derivs(-1..ny+1)
-LOOP FOR iy=-1 TO ny+1 WITH derivs(iy):
-  ARRAY(0..4,0..4) OF REAL matder=0
-  ARRAY(0..4) OF REAL tnder=0
-  DO matder(ir,ic) = (y(iy-2+ic+yshift(iy))-y(iy))^(4-ir) FOR ic=0 TO 4 AND ir=0 TO 4
-  LUdecomp matder
-  d1=0; tnder=0; tnder(3) = 1
-  d1(-2+(*)) = matder\tnder
-  d2=0; tnder=0; tnder(2) = 2
-  d2(-2+(*)) = matder\tnder
-REPEAT
+DO WITH derivs(iy): fdweights(iy,2,1,d1); fdweights(iy,2,2,d2) FOR iy=-1 TO ny+1
+ARRAY(-1..ny+1,-1..1) OF REAL dy1=0
+DO fdweights(iy,1,1,dy1(iy,*)) FOR iy=-1 TO ny+1
 nyl=-1+(iproc-1)*(ny DIV 2 +2) DIV nproc; nyh=iproc*(ny DIV 2 +2) DIV nproc -2
 
 SUBROUTINE deriv2(ARRAY(*) OF REAL f0,f2^)
-  DO WITH derivs(iy) f2(iy) = (SUM d2(i)*f0(iy+i+yshift(iy)) FOR i=-2 TO 2) FOR iy=-1 TO ny+1
+  DO WITH derivs(iy) f2(iy) = (SUM d2(i)*f0(iy+i+yshift(iy,2)) FOR i=-2 TO 2) FOR iy=-1 TO ny+1
 END deriv2
 
 SUBROUTINE deriv(ARRAY(*) OF REAL f0,f1^)
-  DO WITH derivs(iy) f1(iy) = (SUM d1(i)*f0(iy+i+yshift(iy)) FOR i=-2 TO 2) FOR iy=-1 TO ny+1
+  DO WITH derivs(iy) f1(iy) = (SUM d1(i)*f0(iy+i+yshift(iy,2)) FOR i=-2 TO 2) FOR iy=-1 TO ny+1
 END deriv
 
-! Derivatives of a field f(iy,ix,iz) at one grid point
+! Point-wise derivatives of a field f(iy,ix,iz), and the same wall-normal
+! derivative of a profile f(iy)
 INLINE REAL FUNCTION ddx(REAL f(*,*,*); INTEGER iy,ix,iz)=[f(iy,(ix+1) MOD nx,iz)-f(iy,(ix+nx-1) MOD nx,iz)]/(2*dx)
 INLINE REAL FUNCTION ddz(REAL f(*,*,*); INTEGER iy,ix,iz)=[f(iy,ix,(iz+1) MOD nz)-f(iy,ix,(iz+nz-1) MOD nz)]/(2*dz)
-INLINE REAL FUNCTION ddy(REAL f(*,*,*); INTEGER iy,ix,iz)=(SUM derivs(iy).d1(i)*f(iy+i+yshift(iy),ix,iz) FOR i=-2 TO 2)
+INLINE REAL FUNCTION ddy(REAL f(*,*,*); INTEGER iy,ix,iz)=(SUM dy1(iy,i)*f(iy+i+yshift(iy,1),ix,iz) FOR i=-1 TO 1)
+INLINE REAL FUNCTION ddy(REAL f(*); INTEGER iy)=(SUM dy1(iy,i)*f(iy+i+yshift(iy,1)) FOR i=-1 TO 1)
 
 ! Types
 ! -------------------------------------------
 GKETERMS = STRUCTURE(ARRAY(1..3) OF REAL phiR; REAL phiC, scaleENER, scalePROD)
-MEANTERMS = STRUCTURE(REAL U,W,Uy,Wy,Uyy,Wyy,P) 
+MEANTERMS = STRUCTURE(REAL U,V,W,P,Uy,Vy,Wy,Uyy,Vyy,Wyy)
 MKETERMS = STRUCTURE(REAL pump,produv,prodvw,ttrsp,vdiff,dissU,dissW,PHIttrsp,PHIvdiff) 
-BALANCE = STRUCTURE(ARRAY(1..6) OF REAL var,prod,psdiss,ttrsp,vdiff,pstrain,ptrsp,PHIttrsp,PHIvdiff,PHIptrsp) 
+BALANCE = STRUCTURE(ARRAY(1..6) OF REAL var,prod,psdiss,ttrsp,vdiff,pstrain,ptrsp,PHIttrsp,PHIvdiff,PHIptrsp,conv)
 
 ! Single-point statistics of the two planes of a pair
 ARRAY(1..2) OF MEANTERMS mean
@@ -173,7 +185,7 @@ SUBROUTINE loadplane(INTEGER i, iy)
 #pragma omp parallel for
   LOOP FOR ix=0 TO nx-1
     DO WITH mean(i)
-      PH(i,fU,ix,iz)=u(iy,ix,iz)-U; PH(i,fV,ix,iz)=v(iy,ix,iz); PH(i,fW,ix,iz)=w(iy,ix,iz)-W; PH(i,fP,ix,iz)=p(iy,ix,iz)-P
+      PH(i,fU,ix,iz)=u(iy,ix,iz)-U; PH(i,fV,ix,iz)=v(iy,ix,iz)-V; PH(i,fW,ix,iz)=w(iy,ix,iz)-W; PH(i,fP,ix,iz)=p(iy,ix,iz)-P
       PH(i,fUX,ix,iz)=dudx(iy,ix,iz); PH(i,fVX,ix,iz)=ddx(v,iy,ix,iz); PH(i,fWX,ix,iz)=ddx(w,iy,ix,iz)
       PH(i,fUZ,ix,iz)=ddz(u,iy,ix,iz); PH(i,fVZ,ix,iz)=ddz(v,iy,ix,iz); PH(i,fWZ,ix,iz)=dwdz(iy,ix,iz)
       gmask(i,ix,iz)=fluid(iy,ix,iz)

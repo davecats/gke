@@ -13,19 +13,26 @@
 !   kSE  = SUM e2            kFX  = SUM e2*du           kFY = SUM e2*dv
 !   kFZ  = SUM e2*dw         kFC  = SUM 0.5*vs*e2+2*dp*dv
 !   kUV  = SUM du*dv         kUVS = SUM du*vs
+!   kVV  = SUM dv*dv         kVVS = SUM dv*vs
+!   kWV  = SUM dw*dv         kWVS = SUM dw*vs
 !   kGX  = SUM du_i*(d/dx u_i(x)+d/dx u_i(x+r))     (summed over i)
 !   kGZ  = SUM du_i*(d/dz u_i(x)+d/dz u_i(x+r))     (summed over i)
 !   kN   = number of pairs
 !
-kSE=1; kFX=2; kFY=3; kFZ=4; kFC=5; kUV=6; kUVS=7; kGX=8; kGZ=9; kN=10
-ARRAY(0..mx*mz-1,1..10) OF REAL SR=0
+kSE=1; kFX=2; kFY=3; kFZ=4; kFC=5; kUV=6; kUVS=7; kVV=8; kVVS=9; kWV=10; kWVS=11
+kGX=12; kGZ=13; kN=14; nk=14
+ARRAY(0..mx*mz-1,1..nk) OF REAL SR=0
 
 ! GKE terms of the IY2 planes paired with the current IY1
 ARRAY(-1..ny+1,0..mx-1,0..mz-1) OF GKETERMS gke=0
 
 ! Renormalize the pair sums by the number of pairs and add the resulting
 ! contribution of the current pair of planes to gke(IY2,*,*); sig=-1 for the
-! pairs of the upper half of the channel, mirrored onto the lower one
+! pairs of the upper half of the channel, mirrored onto the lower one. With
+! the mean velocity (U,V,W)(y), the fluxes include the transport by the mean
+! velocity, dU_i*<e2> in scale and 0.5*(V1+V2)*<e2> in space, and the
+! production -2*<du_i*dv>*(dU_i/dy)* - 2*<du_i*v*>*d(dU_i/dy), summed over
+! i, with ()* the average and d() the difference between the two planes.
 SUBROUTINE addpairsums(INTEGER IY2, sig)
   LOOP FOR jj=0 TO mx*mz-1 WITH gke(IY2,jj DIV mz,jj MOD mz)
     IF SR(jj,kN)>0.5 THEN
@@ -33,10 +40,13 @@ SUBROUTINE addpairsums(INTEGER IY2, sig)
       REAL iscaleENER=SR(jj,kSE)*cn
       scaleENER=~+iscaleENER
       phiR(1)=~+SR(jj,kFX)*cn+iscaleENER*[mean(2).U-mean(1).U]-2*ni*SR(jj,kGX)*cn
-      phiR(2)=~+sig*SR(jj,kFY)*cn
+      phiR(2)=~+sig*[SR(jj,kFY)*cn+iscaleENER*[mean(2).V-mean(1).V]]
       phiR(3)=~+SR(jj,kFZ)*cn+iscaleENER*[mean(2).W-mean(1).W]-2*ni*SR(jj,kGZ)*cn
-      phiC=~+sig*[SR(jj,kFC)*cn]
-      scalePROD=~-[SR(jj,kUV)*cn]*[mean(1).Uy+mean(2).Uy]-[SR(jj,kUVS)*cn]*[mean(2).Uy-mean(1).Uy]-[SUM uiuj(1).psdiss(i)+uiuj(2).psdiss(i) FOR i=1 TO 3]
+      phiC=~+sig*[SR(jj,kFC)*cn+iscaleENER*0.5*[mean(1).V+mean(2).V]]
+      scalePROD=~-[SR(jj,kUV)*cn]*[mean(1).Uy+mean(2).Uy]-[SR(jj,kUVS)*cn]*[mean(2).Uy-mean(1).Uy]
+      scalePROD=~-[SR(jj,kVV)*cn]*[mean(1).Vy+mean(2).Vy]-[SR(jj,kVVS)*cn]*[mean(2).Vy-mean(1).Vy]
+      scalePROD=~-[SR(jj,kWV)*cn]*[mean(1).Wy+mean(2).Wy]-[SR(jj,kWVS)*cn]*[mean(2).Wy-mean(1).Wy]
+      scalePROD=~-[SUM uiuj(1).psdiss(i)+uiuj(2).psdiss(i) FOR i=1 TO 3]
     END IF
   REPEAT
 END addpairsums

@@ -87,6 +87,10 @@ qGX=23; qGZ=24; nq=24
 !   kFC  = 0.5*[P(1,Ev)+P(v,E)] - [P(uv,u)+P(vv,v)+P(vw,w)] + 2*[P(1,pv)-P(p,v)]
 !   kUV  = P(1,uv) - P(u,v)
 !   kUVS = D(1,uv) + D(v,u)
+!   kVV  = P(1,vv) - P(v,v)
+!   kVVS = D(1,vv)
+!   kWV  = P(1,vw) - P(w,v)
+!   kWVS = D(1,vw) + D(v,w)
 !   kGX  = D(1,Gx) + D(ux,u) + D(vx,v) + D(wx,w)
 !   kGZ  = D(1,Gz) + D(uz,u) + D(vz,v) + D(wz,w)
 ! -------------------------------
@@ -105,6 +109,10 @@ D(kFZ,1,qM,qEW); D(kFZ,1,qE,qW); D(kFZ,-2,qU,qUW); D(kFZ,-2,qV,qVW); D(kFZ,-2,qW
 P(kFC,0.5,qM,qEV); P(kFC,0.5,qV,qE); P(kFC,-1,qUV,qU); P(kFC,-1,qVV,qV); P(kFC,-1,qVW,qW); P(kFC,2,qM,qPV); P(kFC,-2,qP,qV)
 P(kUV,1,qM,qUV); P(kUV,-1,qU,qV)
 D(kUVS,1,qM,qUV); D(kUVS,1,qV,qU)
+P(kVV,1,qM,qVV); P(kVV,-1,qV,qV)
+D(kVVS,1,qM,qVV)
+P(kWV,1,qM,qVW); P(kWV,-1,qW,qV)
+D(kWVS,1,qM,qVW); D(kWVS,1,qV,qW)
 D(kGX,1,qM,qGX); D(kGX,1,qUX,qU); D(kGX,1,qVX,qV); D(kGX,1,qWX,qW)
 D(kGZ,1,qM,qGZ); D(kGZ,1,qUZ,qU); D(kGZ,1,qVZ,qV); D(kGZ,1,qWZ,qW)
 
@@ -139,8 +147,8 @@ END spectra
 
 ! Raw pair sums of planes iy1 and iy2
 ! -------------------------------
-ARRAY(1..10,0..nx-1,0..nz DIV 2) OF COMPLEX SC=0
-ARRAY(1..10,0..nx-1,0..nz-1) OF REAL SP=0
+ARRAY(1..nk,0..nx-1,0..nz DIV 2) OF COMPLEX SC=0
+ARRAY(1..nk,0..nx-1,0..nz-1) OF REAL SP=0
 SUBROUTINE pairsums(INTEGER iy1, iy2)
   ! Cross-spectra summed into the spectra of the pair sums
 #pragma omp parallel for
@@ -152,7 +160,7 @@ SUBROUTINE pairsums(INTEGER iy1, iy2)
   REPEAT LOOP
   ! Back to physical space, sampled at the separations
 #pragma omp parallel for
-  LOOP FOR k=1 TO 10
+  LOOP FOR k=1 TO nk
     HFFT2(SC(k,*,*),SP(k,*,*))
     DO SR(jx*mz+jz,k)=SP(k,imx(jx),imz(jz))/(nx*nz) FOR jx=0 TO mx-1 AND jz=0 TO mz-1
   REPEAT LOOP

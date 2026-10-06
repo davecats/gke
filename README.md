@@ -56,7 +56,9 @@ All knowledge of the input format is confined to *dataset.cpl*, which reads one 
 * only u, v, w, p and the level set are read; the fluid points are those with positive level set;
 * the velocity, stored on the faces of the staggered grid, is interpolated to the cell centres, where all quantities are evaluated;
 * the wall-normal grid consists of the two walls and of the cell centres; at the walls the velocity vanishes and the pressure is extrapolated;
-* dudx, dvdy and dwdz are compact differences across the cell faces, so that the discrete divergence of the simulation is preserved; the other velocity derivatives are second-order central differences in x and z and five-point finite differences in y.
+* all derivatives are standard (explicit) second-order finite differences: dudx, dvdy and dwdz are differences of the values on the two opposite faces of each cell, so that the discrete divergence of the simulation is preserved; the other velocity derivatives are central differences in x and z and 3-point differences in y (one-sided at the walls). Only the smooth averaged profiles are differentiated in y with 5-point stencils.
+
+The mean velocity (U,V,W)(y) is fully accounted for: in particular the mean wall-normal velocity V of the fluid phase, which does not vanish in particle-laden flows, enters the fluctuations, the transport by the mean flow and the production terms. The terms describing the action of the particles on the fluid are not yet included; the open questions and the plan are collected in *doc/particles.md*.
 
 ### Compiling
 

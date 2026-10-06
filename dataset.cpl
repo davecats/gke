@@ -35,7 +35,8 @@
 ! Only u,v,w,p and levelset are read.
 !
 ! The velocity is interpolated to the cell centres, where dudx, dvdy and dwdz
-! are evaluated as compact differences across the faces of each cell, so that
+! are evaluated as second-order central differences of the values on the two
+! opposite faces of each cell (e.g. dudx=[u(i+1)-u(i)]/dx), so that
 ! the discrete divergence of the simulation vanishes. The wall-normal grid
 ! consists of the two walls (iy=-1 and iy=ny+1) and of the n2m cell centres
 ! (iy=0..ny, i.e. ny=n2m-1). At the walls the velocity vanishes, the pressure

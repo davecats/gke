@@ -55,16 +55,16 @@ LOOP files FOR n=nfmin TO nfmax BY dn
 #pragma omp parallel for
   LOOP FOR iy=-1 TO ny+1
     INTEGER npoint=0
-    REAL sU=0, sW=0, sP=0
+    REAL sU=0, sV=0, sW=0, sP=0
     DO
-      IF fluid(iy,ix,iz)>0.5 THEN sU=~+u(iy,ix,iz); sW=~+w(iy,ix,iz); sP=~+p(iy,ix,iz); INC npoint
+      IF fluid(iy,ix,iz)>0.5 THEN sU=~+u(iy,ix,iz); sV=~+v(iy,ix,iz); sW=~+w(iy,ix,iz); sP=~+p(iy,ix,iz); INC npoint
     FOR ix=0 TO nx-1 AND iz=0 TO nz-1
-    IF npoint>0 THEN WITH meantot(iy): U=~+sU/npoint; W=~+sW/npoint; P=~+sP/npoint
+    IF npoint>0 THEN WITH meantot(iy): U=~+sU/npoint; V=~+sV/npoint; W=~+sW/npoint; P=~+sP/npoint
   REPEAT LOOP
 REPEAT files
-WITH meantot: U=~/nftot; W=~/nftot; P=~/nftot
-WITH meantot:  deriv(U, Uy);  deriv(W, Wy);
-WITH meantot: deriv2(U, Uyy); deriv2(W, Wyy);
+WITH meantot: U=~/nftot; V=~/nftot; W=~/nftot; P=~/nftot
+WITH meantot:  deriv(U, Uy);  deriv(V, Vy);  deriv(W, Wy)
+WITH meantot: deriv2(U, Uyy); deriv2(V, Vyy); deriv2(W, Wyy)
 
 ! Compute the TKE budget
 ! ------------------------------------
@@ -77,11 +77,12 @@ LOOP fields FOR n=nfmin TO nfmax BY dn
     ARRAY(1..6) OF REAL svar=0, spst=0, spsd=0, sttr=0
     LOOP FOR ix=0 TO nx-1 AND iz=0 TO nz-1
       IF fluid(iy,ix,iz)>0.5 THEN WITH meantot(iy)
-        ! Fluctuations and their gradient
-        REAL uf=u(iy,ix,iz)-U, vf=v(iy,ix,iz), wf=w(iy,ix,iz)-W, pf=p(iy,ix,iz)-P
-        REAL ux=dudx(iy,ix,iz),    uy=ddy(u,iy,ix,iz)-Uy, uz=ddz(u,iy,ix,iz)
-        REAL vx=ddx(v,iy,ix,iz),   vy=dvdy(iy,ix,iz),     vz=ddz(v,iy,ix,iz)
-        REAL wx=ddx(w,iy,ix,iz),   wy=ddy(w,iy,ix,iz)-Wy, wz=dwdz(iy,ix,iz)
+        ! Fluctuations and their gradient (the wall-normal derivative of the
+        ! mean profiles is taken with the same operator as that of the fields)
+        REAL uf=u(iy,ix,iz)-U, vf=v(iy,ix,iz)-V, wf=w(iy,ix,iz)-W, pf=p(iy,ix,iz)-P
+        REAL ux=dudx(iy,ix,iz),  uy=ddy(u,iy,ix,iz)-ddy(meantot.U,iy), uz=ddz(u,iy,ix,iz)
+        REAL vx=ddx(v,iy,ix,iz), vy=dvdy(iy,ix,iz)-ddy(meantot.V,iy),  vz=ddz(v,iy,ix,iz)
+        REAL wx=ddx(w,iy,ix,iz), wy=ddy(w,iy,ix,iz)-ddy(meantot.W,iy), wz=dwdz(iy,ix,iz)
         svar(1)=~+uf*uf; svar(2)=~+vf*vf; svar(3)=~+wf*wf
         svar(4)=~+uf*vf; svar(5)=~+uf*wf; svar(6)=~+vf*wf
         spu=~+uf*pf; spv=~+vf*pf; spw=~+wf*pf
@@ -117,7 +118,17 @@ DO WITH uiujtot: deriv(PHIttrsp(*,i),ttrsp(*,i)); FOR i=1 TO 6;
 ! ptrsp
 DO WITH uiujtot: deriv(PHIptrsp(*,i),ptrsp(*,i)); FOR i=1 TO 6;
 ! prod
-DO WITH meantot(iy), uiujtot(iy): prod(1)=-2*var(4)*Uy; prod(3)=-2*var(6)*Wy; prod(4)=-var(2)*Uy; prod(5)=-var(4)*Wy-var(6)*Uy; prod(6)=-var(2)*Wy; FOR ALL iy
+DO WITH meantot(iy), uiujtot(iy)
+  prod(1)=-2*var(4)*Uy; prod(2)=-2*var(2)*Vy; prod(3)=-2*var(6)*Wy
+  prod(4)=-var(2)*Uy-var(4)*Vy; prod(5)=-var(4)*Wy-var(6)*Uy; prod(6)=-var(2)*Wy-var(6)*Vy
+FOR ALL iy
+! conv (mean convection)
+LOOP FOR i=1 TO 6
+  ARRAY(-1..ny+1) OF REAL PHIconv=0
+  DO PHIconv(iy)=-meantot(iy).V*uiujtot(iy).var(i) FOR ALL iy
+  WITH uiujtot: deriv(PHIconv,conv(*,i))
+REPEAT
+! MKE budget (assumes V=0)
 DO WITH meantot(iy), uiujtot(iy), mketot(iy): produv=-0.5*prod(1); prodvw=-0.5*prod(3) FOR ALL iy
 ! dissU(MKE) and dissW(MKE)
 DO WITH meantot(iy), mketot(iy): dissU=ni*Uy^2; dissW=ni*Wy^2 FOR ALL iy

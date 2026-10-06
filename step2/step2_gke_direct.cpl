@@ -68,8 +68,8 @@ SUBROUTINE pairsums()
   LOOP FOR jj=0 TO mx*mz-1
     INTEGER jx=jj DIV mz, jz=jj MOD mz
     INTEGER rx=imx(jx), rz=imz(jz), npair=0
-    REAL sSE=0, sFX=0, sFY=0, sFZ=0, sFC=0, sUV=0, sUVS=0, sGX=0, sGZ=0
-#pragma acc loop vector collapse(2) reduction(+:sSE,sFX,sFY,sFZ,sFC,sUV,sUVS,sGX,sGZ,npair)
+    REAL sSE=0, sFX=0, sFY=0, sFZ=0, sFC=0, sUV=0, sUVS=0, sVV=0, sVVS=0, sWV=0, sWVS=0, sGX=0, sGZ=0
+#pragma acc loop vector collapse(2) reduction(+:sSE,sFX,sFY,sFZ,sFC,sUV,sUVS,sVV,sVVS,sWV,sWVS,sGX,sGZ,npair)
     LOOP FOR ix=0 TO nx-1
       LOOP FOR iz=0 TO nz-1
         INTEGER ix2=(ix+rx) MOD nx, iz2=(iz+rz) MOD nz
@@ -79,7 +79,7 @@ SUBROUTINE pairsums()
           REAL e2=du*du+dv*dv+dw*dw
           sSE=~+e2; sFX=~+e2*du; sFY=~+e2*dv; sFZ=~+e2*dw
           sFC=~+0.5*vs*e2+2*dpp*dv
-          sUV=~+du*dv; sUVS=~+du*vs
+          sUV=~+du*dv; sUVS=~+du*vs; sVV=~+dv*dv; sVVS=~+dv*vs; sWV=~+dw*dv; sWVS=~+dw*vs
           sGX=~+du*(PH(1,fUX,ix,iz)+PH(2,fUX,ix2,iz2))+dv*(PH(1,fVX,ix,iz)+PH(2,fVX,ix2,iz2))+dw*(PH(1,fWX,ix,iz)+PH(2,fWX,ix2,iz2))
           sGZ=~+du*(PH(1,fUZ,ix,iz)+PH(2,fUZ,ix2,iz2))+dv*(PH(1,fVZ,ix,iz)+PH(2,fVZ,ix2,iz2))+dw*(PH(1,fWZ,ix,iz)+PH(2,fWZ,ix2,iz2))
           INC npair
@@ -87,7 +87,8 @@ SUBROUTINE pairsums()
       REPEAT
     REPEAT
     SR(jj,kSE)=sSE; SR(jj,kFX)=sFX; SR(jj,kFY)=sFY; SR(jj,kFZ)=sFZ; SR(jj,kFC)=sFC
-    SR(jj,kUV)=sUV; SR(jj,kUVS)=sUVS; SR(jj,kGX)=sGX; SR(jj,kGZ)=sGZ; SR(jj,kN)=npair
+    SR(jj,kUV)=sUV; SR(jj,kUVS)=sUVS; SR(jj,kVV)=sVV; SR(jj,kVVS)=sVVS; SR(jj,kWV)=sWV; SR(jj,kWVS)=sWVS
+    SR(jj,kGX)=sGX; SR(jj,kGZ)=sGZ; SR(jj,kN)=npair
   REPEAT
 #pragma acc update host(SR)
 END pairsums
