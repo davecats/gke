@@ -1,13 +1,13 @@
 # Local Makefile picked up by "cpl make" instead of the default one of the
 # CPL installation: it selects the C compiler and its flags, so that the
-# OpenACC GPU build of the physical-space program can use the NVIDIA HPC
+# OpenACC GPU build of step2_gke_direct.cpl can use the NVIDIA HPC
 # compiler, e.g. (after loading the NVIDIA HPC SDK environment)
 #
-#   GPU=1 cpl make step2_gke_physical.cpl -acc=gpu
+#   GPU=1 cpl make step2_gke_direct.cpl -acc=gpu
 #
 # while the default remains gcc with the standard CPL flags, e.g.
 #
-#   cpl make step2_gke_physical.cpl -fopenmp
+#   cpl make step2_gke_direct.cpl -fopenmp
 #
 BASEFLAGS:=$(CFLAGS)
 ifeq ($(GPU),1)

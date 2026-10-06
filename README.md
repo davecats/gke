@@ -9,8 +9,8 @@ This repository is the reference implementation of the GKE described in
 
 The code is:
 * *Simple*: it consists of few lines of code 
-* *Parallel*: with shared and distributed memory parallelization, and optional GPU offload
-* *Efficient*: it leverages Fast Fourier Transform algorithms whenever possible
+* *Parallel*: with shared and distributed memory parallelization
+* *Efficient*: it leverages Fast Fourier Transform algorithms whenever possible, also for the averages restricted to the fluid phase of particle-laden flows
 
 and written in the 
 <span itemscope itemtype="http://schema.org/SoftwareApplication http://schema.org/ComputerLanguage"><meta itemprop="name" content="CPL"><meta itemprop="applicationCategory" content="DeveloperApplication"><meta itemprop="applicationSubCategory" content="Programming Language"><meta itemprop="operatingSystem" content="Linux, macOS, Windows Subsystem for Linux"><a itemprop="url" href="https://CPLcode.net" target="_blank" rel="noopener"><img src="https://img.shields.io/static/v1?label=CPL&message=Compiler+and+Programming+Language&color=success&style=plastic" style="vertical-align:middle" alt="CPL Compiler and Programming Language"></a></span>
@@ -19,73 +19,80 @@ and written in the
 
 The code is written in the programming language CPL, whose compiler can be downloaded [here](https://cplcode.net/).
 
+This branch computes the GKE in physical space for the particle-resolved channel DNS described in *simulation_data_description.pdf* (the "xinju dataset"): every average is taken over the fluid points only, i.e. points (single-point statistics) and pairs of points (two-point statistics) with at least one point inside a particle are excluded, and averages are renormalized by the number of accumulated points or pairs.
+
 The computation is divided in three steps, each of them provided as a separate program and run in sequence:
-1) **step 1** computes the single-point budgets of the Reynolds stresses and the mean profiles, and writes them to *uiuj.bin*;
-2) **step 2** computes the GKE terms that do not involve wall-normal derivatives, reading *uiuj.bin* and writing *gke.bin*;
+1) **step 1** (*step1/step1_singlepoints.cpl*) computes the mean profiles and the single-point budgets of the Reynolds stresses, and writes them to *uiuj.bin*;
+2) **step 2** (*step2/step2_gke.cpl*) computes the GKE terms that do not involve wall-normal derivatives, reading *uiuj.bin* and writing *gke.bin*;
 3) **step 3** (*step3/step3_gke.cpl*) adds the GKE terms involving wall-normal derivatives, updating *gke.bin* in place.
 
-Steps 1 and 2 exist in two interchangeable variants, so that three execution paths are available:
+Step 2 exists in two interchangeable implementations, which compute the same averages over pairs of fluid points and agree up to round-off:
 
-| path | programs | purpose |
+| program | method | cost |
 |---|---|---|
-| Fourier (default) | *step1_singlepoints_fourier*, *step2_gke_fourier* | fastest CPU path: statistics evaluated with Parseval's theorem and the convolution theorem |
-| physical space | *step1_singlepoints_physical*, *step2_gke_physical* | statistics accumulated point by point (step 1) and over pairs of points (step 2); slower, but supports particle masking |
-| physical space on GPU | same as above, step 2 built with the NVIDIA HPC SDK | offloads the pair-accumulation kernel, which dominates the cost of step 2, to a GPU |
+| *step2_gke* (default) | each pair sum is expanded into correlations of mask-weighted fields, evaluated for all separations at once with FFTs | about 1 minute per snapshot of the xinju dataset on 24 cores |
+| *step2_gke_direct* | explicit accumulation over all pairs of points and all sampled separations; OpenMP or OpenACC (GPU) | about 6 hours per snapshot on 24 cores; serves as reference |
 
-For single-phase flows all paths produce identical results: the two CPU variants agree up to round-off, and within each variant the results are independent of the number of threads or processes down to the last bit. All programs are OpenMP-parallel; the distributed-memory parallelization of step 2 and the GPU offload are described below.
+All programs are OpenMP-parallel, and their results do not depend on the number of threads.
 
 ### Input and output files
 
 The programs run in a case directory containing:
-* *dns.in* — the simulation parameters (grid, box, Reynolds number, ...);
-* *Dati.cart.〈n〉.fld* and *pField〈n〉.fld* — the velocity and pressure snapshots, n = nfmin ... nfmax;
-* *mask.〈n〉.fld* — optional particle masks for the physical-space path (see below).
+* *flow_field.in* — the parameter file of the simulation (Fortran namelist; grid, box, Reynolds number, MPI decomposition);
+* *fluid〈n〉/flowfield〈rank〉.field* — the snapshots, n written with seven digits, one file per MPI rank of the simulation;
+* *gke.in* — the parameters of the analysis, e.g.
+```
+&gke
+nfmin = 20000          ! first snapshot
+nfmax = 20000          ! last snapshot
+dn    = 1000           ! snapshot increment
+uLx   = 0.2, 0.5       ! x-separations: all points up to uLx(1), every 4th up to uLx(2), every 8th beyond
+uLz   = 0.2, 0.5       ! z-separations: as above
+/
+```
+The outputs are *uiuj.bin* (single-point budgets, step 1) and *gke.bin* (GKE terms, steps 2 and 3); their binary layout is documented in *test/check.py*, which also shows how to read and plot them.
 
-The snapshot range (nfmin, nfmax, dn), the limits of the undersampled separations (uLx1, uLx2, uLz1, uLz2) and the output file name are set at the top of *gkedata.cpl* and compiled into the programs: edit them and recompile for a new case. The outputs are *uiuj.bin* (single-point budgets, step 1) and *gke.bin* (GKE terms, steps 2 and 3); their binary layout is documented in *tutorial/check.py*, which also shows how to read and plot them (MATLAB equivalent: *tutorial/check.m*).
+All knowledge of the input format is confined to *dataset.cpl*, which reads one snapshot and provides the fields to the rest of the code; *namelist.cpl* reads the parameter files. Another dataset can be analysed by replacing *dataset.cpl* with a module providing the same interface (documented at its top). For the xinju dataset:
+* only u, v, w, p and the level set are read; the fluid points are those with positive level set;
+* the velocity, stored on the faces of the staggered grid, is interpolated to the cell centres, where all quantities are evaluated;
+* the wall-normal grid consists of the two walls and of the cell centres; at the walls the velocity vanishes and the pressure is extrapolated;
+* dudx, dvdy and dwdz are compact differences across the cell faces, so that the discrete divergence of the simulation is preserved; the other velocity derivatives are second-order central differences in x and z and five-point finite differences in y.
 
 ### Compiling
 
-`./compile.bash` builds all five programs with gcc and OpenMP enabled. Individual programs are built with, e.g.,
+`./compile.bash` builds all programs with gcc and OpenMP enabled. Individual programs are built with, e.g.,
 ```
-cd step2; cpl make step2_gke_fourier.cpl -fopenmp
+cd step2; cpl make step2_gke.cpl -fopenmp
 ```
-(omitting `-fopenmp` gives a serial build with identical results). For the GPU build of step 2, load the NVIDIA HPC SDK environment (e.g. `module load nvhpc`) and use
+(omitting `-fopenmp` gives a serial build). For the GPU build of *step2_gke_direct*, load the NVIDIA HPC SDK environment (e.g. `module load nvhpc`) and use
 ```
-cd step2; GPU=1 cpl make step2_gke_physical.cpl -acc=gpu
+cd step2; GPU=1 cpl make step2_gke_direct.cpl -acc=gpu
 ```
 The local *step2/Makefile* selects the compiler: gcc by default, nvc when `GPU=1` is set. The NVIDIA HPC SDK runtime libraries must also be available when running the GPU build.
 
 ### Running
 
-From the case directory, run the three steps of the chosen path in sequence, e.g.
+From the case directory, run the three steps in sequence, e.g.
 ```
 export OMP_WAIT_POLICY=passive
 export OMP_NUM_THREADS=24
-../step1/step1_singlepoints_fourier
-../step2/step2_gke_fourier
+../step1/step1_singlepoints
+../step2/step2_gke
 ../step3/step3_gke
 ```
 `OMP_NUM_THREADS` selects the number of threads; setting `OMP_WAIT_POLICY=passive` is recommended, since the default busy-waiting policy can slow down the parallel regions considerably when all hardware threads are used (the programs print a hint if it is unset).
 
-Step 2, by far the most expensive one, additionally supports distributed-memory parallelization: launched as
+Memory: a snapshot occupies 8 fields of (n1m)×(n2m+2)×(n3m) doubles, and *step2_gke* additionally keeps the spectra of 24 quantities in all planes (about 3.4 GiB for the xinju dataset, printed at startup).
+
+Step 2 additionally supports distributed-memory parallelization: launched as
 ```
-../step2/step2_gke_fourier <iproc> <nproc>
+../step2/step2_gke <iproc> <nproc>
 ```
-each of the nproc independently started processes computes its own range of wall-normal positions and writes its own disjoint part of *gke.bin* (which is shared, so the processes may run on different nodes of a common filesystem). All processes must complete before step 3 is run. For the GPU build, one GPU is used per process and can be selected with `ACC_DEVICE_NUM` or `CUDA_VISIBLE_DEVICES`.
+each of the nproc independently started processes computes its own range of wall-normal positions and writes its own disjoint part of *gke.bin* (which is shared, so the processes may run on different nodes of a common filesystem). All processes must complete before step 3 is run.
 
-The directory *tutorial* contains the bash script *tutorial/run_tutorial.bash*, which compiles the code and runs the Fourier path on simple test data corresponding to a Minimal Flow Unit (MFU) at a friction Reynolds number of $Re_\tau=200$, visualising the results with MATLAB (*check.m*) — or use `python3 check.py` if MATLAB is unavailable.
+### Testing
 
-The memory requirement of step 2 can be reduced by commenting the line  
-```#define wholefield```  
-of *step2/step2_gke_fourier.cpl* (or *step2/step2_gke_physical.cpl*). Doing so will deactivate loading the whole velocity field and only a pair (iy1,iy2) of wall-parallel planes of the velocity field will be loaded at a time. Beware that this increases the I/O and possibly slows down calculations.
-
-### Physical-space statistics and particle masking
-
-The programs *step1/step1_singlepoints_physical.cpl* and *step2/step2_gke_physical.cpl* accumulate the statistics point by point (step 1) and over pairs of points (step 2) in physical space, instead of using Parseval's theorem and the convolution theorem. For single-phase flows the results are identical (to round-off) to those of the *_fourier* programs, but the computation is slower. Their purpose is masked statistics, e.g. for particle-laden flows: for each snapshot *Dati.cart.〈n〉.fld* an optional mask file *mask.〈n〉.fld* is read if present, a `STORED ARRAY(-1..ny+1, 0..2*nxd-1, 0..nzd-1) OF REAL` (i.e. double precision, C-ordered, on the fine physical grid nxc × nzc printed at startup) with 1.0 marking fluid points and 0.0 solid points. Points (step 1) and point pairs (step 2) with at least one point inside the solid phase are skipped, and every average is renormalized by the number of accumulated points or pairs. If no mask file exists all points are treated as fluid. In step 1 the velocity gradient is still computed spectrally from the global field; only the accumulation of the statistics is performed in physical space.
-
-### GPU offload
-
-The pair-accumulation kernel of *step2_gke_physical.cpl* carries OpenACC directives next to the OpenMP ones, so a single source serves the serial, multithreaded and GPU execution paths. In the GPU build the plane fields, the particle mask and the undersampled separations stay resident on the GPU; per pair of wall-parallel planes only the updated plane fields are copied in and the small buffer of raw pair sums out, while the renormalization by the pair counts and the GKE updates remain on the host. The GPU results coincide with the CPU ones up to round-off (the parallel reduction changes the summation order); on double-precision-capable data-center GPUs the kernel, which performs the overwhelming majority of the work, is essentially flop-bound.
+`test/run_test.bash` generates a small synthetic case in the format of the xinju dataset (*test/make_testcase.py*), runs the whole pipeline with both implementations of step 2 and checks that they agree up to round-off.
 
 ### Database
 

@@ -1,0 +1,115 @@
+!
+! Input of the flow fields: particle-resolved channel DNS (xinju_dataset)
+!
+! This module is the only place where the format of the input data is known.
+! It provides to the rest of the code
+!
+!   nx, nz          number of grid points in the periodic x and z directions
+!   ny              the wall-normal grid is iy=-1..ny+1 (see below)
+!   Lx, Ly, Lz      size of the computational box
+!   ni              kinematic viscosity
+!   dx, dz          grid spacing in x and z
+!   y(-1..ny+1)     wall-normal coordinates
+!   u,v,w,p,fluid   ARRAY(-1..ny+1,0..nx-1,0..nz-1) OF REAL: velocity,
+!                   pressure and fluid indicator (1=fluid, 0=solid) of one
+!                   snapshot, all collocated at the same grid points
+!   dudx,dvdy,dwdz  the velocity derivatives that make up the divergence, at
+!                   the same points, consistent with the discretization of
+!                   the simulation (the remaining derivatives are computed
+!                   by the GKE code itself)
+!   readsnapshot(n) loads snapshot n into the above arrays
+!
+! so that a different dataset can be used by replacing this module with one
+! providing the same interface.
+!
+! Format of the dataset (see simulation_data_description.pdf). The case
+! directory contains the parameter file "flow_field.in" (Fortran namelist)
+! and one directory "fluid<n>" per snapshot, n written with seven digits,
+! with one file "flowfield<rank>.field" per MPI rank of the simulation. Each
+! file holds, as consecutive blocks of little-endian doubles in Fortran order
+! (x fastest), the 11 variables u,v,w, fturb(x,y,z), fib(x,y,z), p, levelset
+! of the rank's subdomain n1m x n2drm x n3dcm, with n2drm=n2m/proc_r,
+! n3dcm=n3m/proc_c and rank = rank_r*proc_c + rank_c. The grid is uniform and
+! staggered: p and levelset (<0 solid, >0 fluid) are located at the centres of
+! the cells, the velocity components at the centres of their lower faces.
+! Only u,v,w,p and levelset are read.
+!
+! The velocity is interpolated to the cell centres, where dudx, dvdy and dwdz
+! are evaluated as compact differences across the faces of each cell, so that
+! the discrete divergence of the simulation vanishes. The wall-normal grid
+! consists of the two walls (iy=-1 and iy=ny+1) and of the n2m cell centres
+! (iy=0..ny, i.e. ny=n2m-1). At the walls the velocity vanishes, the pressure
+! is extrapolated with second-order accuracy and the fluid indicator is that
+! of the adjacent cells.
+!
+
+USE namelist
+
+! Parameters
+! -------------------------------------------
+INLINE REAL FUNCTION param(STRING name; INTEGER i)=nmlvalue("flow_field.in",name,i)
+IF param("bcond",1)#0 OR param("bcond",2)#1 OR param("bcond",3)#0 THEN
+  WRITE "flow_field.in: a channel (bcond=0,1,0) is required"; STOP
+END IF
+INTEGER nx=ROUND(param("num_grid",1)), ny=ROUND(param("num_grid",2))-1, nz=ROUND(param("num_grid",3))
+INTEGER proc_r=ROUND(param("proc_r",1)), proc_c=ROUND(param("proc_c",1))
+REAL Lx=param("domainlength",1), Ly=param("domainlength",2), Lz=param("domainlength",3)
+REAL ni=1/param("re",1)
+REAL dx=Lx/nx, dy=Ly/(ny+1), dz=Lz/nz
+
+! Wall-normal grid
+! -------------------------------------------
+REAL y(-1..ny+1)
+MODULE
+  REAL ybound=param("domainbound",2)
+  DO y(iy)=ybound+(iy+0.5)*dy FOR iy=0 TO ny
+  y(-1)=ybound; y(ny+1)=ybound+Ly
+END MODULE
+
+! Fields of one snapshot
+! -------------------------------------------
+ARRAY(-1..ny+1,0..nx-1,0..nz-1) OF REAL u=0, v=0, w=0, p=0, fluid=0
+ARRAY(-1..ny+1,0..nx-1,0..nz-1) OF REAL dudx=0, dvdy=0, dwdz=0
+
+! Periodic interpolation from the lower faces to the centres of the cells
+SUBROUTINE midpoints(REAL f^(*))
+  REAL f0=f(f.LO)
+  DO f(i)=0.5*[f(i)+f(i+1)] FOR i=f.LO TO f.HI-1
+  f(f.HI)=0.5*[f(f.HI)+f0]
+END midpoints
+
+! Per-rank file of the simulation and buffer for one of its variables
+INTEGER n2drm=(ny+1) DIV proc_r, n3dcm=nz DIV proc_c
+POINTER TO STORED ARRAY(0..10,0..n3dcm-1,0..n2drm-1,0..nx-1) OF REAL rankdata
+ARRAY(0..n3dcm-1,0..n2drm-1,0..nx-1) OF REAL block
+
+! Copy variable var of the current rank file into f, at the offsets j0,k0
+SUBROUTINE copy(INTEGER var, j0, k0; ARRAY(*,*,*) OF REAL f^)
+  block=rankdata(var)
+  DO f(j0+j,ix,k0+k)=block(k,j,ix) FOR k=0 TO n3dcm-1 AND j=0 TO n2drm-1 AND ix=0 TO nx-1
+END copy
+
+SUBROUTINE readsnapshot(INTEGER n)
+  LOOP FOR rank=0 TO proc_r*proc_c-1
+    STRING filename=WRITE("fluid"n:07"/flowfield"rank:05".field")
+    rankdata=OPENRO(filename)
+    IF rankdata=NULL THEN WRITE "Cannot open "filename; STOP
+    INTEGER j0=(rank DIV proc_c)*n2drm, k0=(rank MOD proc_c)*n3dcm
+    copy(0,j0,k0,u); copy(1,j0,k0,v); copy(2,j0,k0,w); copy(9,j0,k0,p); copy(10,j0,k0,fluid)
+    CLOSE rankdata
+  REPEAT
+  DO fluid(iy,ix,iz)=IF fluid(iy,ix,iz)>0 THEN 1 ELSE 0 FOR ALL iy,ix,iz
+  ! Walls
+  DO u(iy,*,*)=0; v(iy,*,*)=0; w(iy,*,*)=0 FOR iy IN (-1,ny+1)
+  p(-1,*,*)=[15*p(0,*,*)-10*p(1,*,*)+3*p(2,*,*)]/8
+  p(ny+1,*,*)=[15*p(ny,*,*)-10*p(ny-1,*,*)+3*p(ny-2,*,*)]/8
+  fluid(-1,*,*)=fluid(0,*,*); fluid(ny+1,*,*)=fluid(ny,*,*)
+  ! Divergence terms and interpolation of the velocity to the cell centres
+  ! (v(ny+1)=0 is the upper wall, i.e. the upper face of the last cell)
+  DO dudx(iy,ix,iz)=[u(iy,(ix+1) MOD nx,iz)-u(iy,ix,iz)]/dx FOR iy=0 TO ny AND ix=0 TO nx-1 AND iz=0 TO nz-1
+  DO dvdy(iy,ix,iz)=[v(iy+1,ix,iz)-v(iy,ix,iz)]/dy          FOR iy=0 TO ny AND ix=0 TO nx-1 AND iz=0 TO nz-1
+  DO dwdz(iy,ix,iz)=[w(iy,ix,(iz+1) MOD nz)-w(iy,ix,iz)]/dz FOR iy=0 TO ny AND ix=0 TO nx-1 AND iz=0 TO nz-1
+  DO midpoints(u(iy,*,iz)) FOR iy=0 TO ny AND iz=0 TO nz-1
+  DO midpoints(w(iy,ix,*)) FOR iy=0 TO ny AND ix=0 TO nx-1
+  DO v(iy,*,*)=0.5*[v(iy,*,*)+v(iy+1,*,*)] FOR iy=0 TO ny
+END readsnapshot

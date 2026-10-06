@@ -1,0 +1,187 @@
+!
+! Computes the source term, space and scale flux
+! in the generalized Kolmogorov equation specialized
+! for channel flow, as in Marati, Casciola, Piva, JFM 2004,
+! equation 3.4 and following definitions.
+!
+! The GKE terms are averages over all pairs of fluid points (x, x+r) of two
+! wall-parallel planes (pairs with a point inside a particle are excluded).
+! They follow from the raw pair sums defined in pairsums.cpl, whose
+! integrands are polynomials in the velocity and pressure fluctuations at the
+! two points. Expanding these polynomials, every pair sum becomes a
+! combination of correlations
+!
+!   C(f,g)(r) = SUM_x m1(x)*f1(x) * m2(x+r)*g2(x+r)
+!
+! between quantities f of plane 1 and g of plane 2, m being the fluid
+! indicator. Each correlation is evaluated for all separations at once with
+! FFTs: the spectra of the quantities are computed once per plane, and per
+! pair of planes only their products and one inverse transform per pair sum
+! remain. The results coincide (up to round-off) with the explicit pair
+! accumulation of step2_gke_direct.cpl, at a much lower cost. The products
+! and the transforms are OpenMP-parallel: compile with -fopenmp.
+!
+! This program allows distributed memory parallelization by distributing
+! the arrays containing the terms of the Generalized Kolmogorov Equations (GKE)
+! along the wall-normal direction.
+!
+! -----------------------------------------------------------------------------
+! If you use this code and find it helpful please cite
+! 
+! D. Gatti et al., "An efficient numerical method for the Generalized Kolmogorov
+! Equation", Journal of Turbulence, (submitted, 2018)
+! -----------------------------------------------------------------------------
+!
+! Copyright (C) 2018  Dr. Davide Gatti
+!
+! This program is free software: you can redistribute it and/or modify
+! it under the terms of the GNU General Public License as published by
+! the Free Software Foundation, either version 3 of the License, or
+! any later version.
+!
+! This program is distributed in the hope that it will be useful,
+! but WITHOUT ANY WARRANTY; without even the implied warranty of
+! MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+! GNU General Public License for more details.
+!
+! You should have received a copy of the GNU General Public License
+! along with this program.  If not, see <https://www.gnu.org/licenses/>.
+! 
+! Contacts:
+!
+! Dr. Davide Gatti  
+! davide.gatti [at] kit.edu
+! msc.davide.gatti [at] gmail.com
+! 
+! Karlsruhe Institute of Technology
+! Institute of Fluid Dynamics
+! Kaiserstraße 10
+! 76131 Karlsruhe 
+! 
+
+
+USE ../fftw
+USE ../gkedata
+USE pairsums
+USE ../wallclock
+REAL t1
+
+! Quantities whose correlations make up the pair sums (u,v,w,p denote
+! fluctuations, E=u^2+v^2+w^2, Gx=u*ux+v*vx+w*wx, Gz=u*uz+v*vz+w*wz, with
+! ux=d/dx u etc.; qM is the fluid indicator alone)
+! -------------------------------
+qM=1; qU=2; qV=3; qW=4; qP=5; qE=6; qUU=7; qVV=8; qWW=9; qUV=10; qUW=11; qVW=12
+qEU=13; qEV=14; qEW=15; qPV=16; qUX=17; qVX=18; qWX=19; qUZ=20; qVZ=21; qWZ=22
+qGX=23; qGZ=24; nq=24
+
+! Expansion of the pair sums into correlations: term t contributes
+! c*C(f,g) to the pair sum k. With the shorthands
+! D(f,g)=C(f,g)-C(g,f) and P(f,g)=C(f,g)+C(g,f), and since
+! e2=E1+E2-2*(u1*u2+v1*v2+w1*w2), the pair sums read
+!
+!   kN   = C(1,1)
+!   kSE  = P(1,E) - 2*[C(u,u)+C(v,v)+C(w,w)]
+!   kFX  = D(1,Eu) + D(E,u) - 2*[D(u,uu)+D(v,uv)+D(w,uw)]
+!   kFY  = D(1,Ev) + D(E,v) - 2*[D(u,uv)+D(v,vv)+D(w,vw)]
+!   kFZ  = D(1,Ew) + D(E,w) - 2*[D(u,uw)+D(v,vw)+D(w,ww)]
+!   kFC  = 0.5*[P(1,Ev)+P(v,E)] - [P(uv,u)+P(vv,v)+P(vw,w)] + 2*[P(1,pv)-P(p,v)]
+!   kUV  = P(1,uv) - P(u,v)
+!   kUVS = D(1,uv) + D(v,u)
+!   kGX  = D(1,Gx) + D(ux,u) + D(vx,v) + D(wx,w)
+!   kGZ  = D(1,Gz) + D(uz,u) + D(vz,v) + D(wz,w)
+! -------------------------------
+TERM = STRUCTURE(INTEGER k, f, g; REAL c)
+ARRAY(1..100) OF TERM terms; INTEGER nterms=0
+SUBROUTINE C(INTEGER k; REAL c; INTEGER f, g)
+  INC nterms; terms(nterms).k=k; terms(nterms).c=c; terms(nterms).f=f; terms(nterms).g=g
+END C
+SUBROUTINE D(INTEGER k; REAL c; INTEGER f, g) = C(k,c,f,g); C(k,-c,g,f)
+SUBROUTINE P(INTEGER k; REAL c; INTEGER f, g) = C(k,c,f,g); C(k,c,g,f)
+C(kN,1,qM,qM)
+P(kSE,1,qM,qE); C(kSE,-2,qU,qU); C(kSE,-2,qV,qV); C(kSE,-2,qW,qW)
+D(kFX,1,qM,qEU); D(kFX,1,qE,qU); D(kFX,-2,qU,qUU); D(kFX,-2,qV,qUV); D(kFX,-2,qW,qUW)
+D(kFY,1,qM,qEV); D(kFY,1,qE,qV); D(kFY,-2,qU,qUV); D(kFY,-2,qV,qVV); D(kFY,-2,qW,qVW)
+D(kFZ,1,qM,qEW); D(kFZ,1,qE,qW); D(kFZ,-2,qU,qUW); D(kFZ,-2,qV,qVW); D(kFZ,-2,qW,qWW)
+P(kFC,0.5,qM,qEV); P(kFC,0.5,qV,qE); P(kFC,-1,qUV,qU); P(kFC,-1,qVV,qV); P(kFC,-1,qVW,qW); P(kFC,2,qM,qPV); P(kFC,-2,qP,qV)
+P(kUV,1,qM,qUV); P(kUV,-1,qU,qV)
+D(kUVS,1,qM,qUV); D(kUVS,1,qV,qU)
+D(kGX,1,qM,qGX); D(kGX,1,qUX,qU); D(kGX,1,qVX,qV); D(kGX,1,qWX,qW)
+D(kGZ,1,qM,qGZ); D(kGZ,1,qUZ,qU); D(kGZ,1,qVZ,qV); D(kGZ,1,qWZ,qW)
+
+! Spectra of the quantities in all planes of the current snapshot
+! -------------------------------
+ARRAY(-1..ny+1,1..nq,0..nx-1,0..nz DIV 2) OF COMPLEX Q=0
+ARRAY(1..nq,0..nx-1,0..nz-1) OF REAL q=0
+IF has_terminal THEN WRITE "Spectra require " SIZEOF(Q)/(1024.0**3) " GiB of memory"
+
+SUBROUTINE spectra(INTEGER iy)
+  loadplane(1,iy)
+#pragma omp parallel for
+  LOOP FOR ix=0 TO nx-1
+    LOOP FOR iz=0 TO nz-1
+      REAL m=gmask(1,ix,iz), uf=PH(1,fU,ix,iz), vf=PH(1,fV,ix,iz), wf=PH(1,fW,ix,iz), pf=PH(1,fP,ix,iz)
+      REAL ux=PH(1,fUX,ix,iz), vx=PH(1,fVX,ix,iz), wx=PH(1,fWX,ix,iz)
+      REAL uz=PH(1,fUZ,ix,iz), vz=PH(1,fVZ,ix,iz), wz=PH(1,fWZ,ix,iz)
+      REAL E=uf*uf+vf*vf+wf*wf
+      q(qM,ix,iz)=m; q(qU,ix,iz)=m*uf; q(qV,ix,iz)=m*vf; q(qW,ix,iz)=m*wf; q(qP,ix,iz)=m*pf; q(qE,ix,iz)=m*E
+      q(qUU,ix,iz)=m*uf*uf; q(qVV,ix,iz)=m*vf*vf; q(qWW,ix,iz)=m*wf*wf
+      q(qUV,ix,iz)=m*uf*vf; q(qUW,ix,iz)=m*uf*wf; q(qVW,ix,iz)=m*vf*wf
+      q(qEU,ix,iz)=m*E*uf; q(qEV,ix,iz)=m*E*vf; q(qEW,ix,iz)=m*E*wf; q(qPV,ix,iz)=m*pf*vf
+      q(qUX,ix,iz)=m*ux; q(qVX,ix,iz)=m*vx; q(qWX,ix,iz)=m*wx; q(qUZ,ix,iz)=m*uz; q(qVZ,ix,iz)=m*vz; q(qWZ,ix,iz)=m*wz
+      q(qGX,ix,iz)=m*[uf*ux+vf*vx+wf*wx]; q(qGZ,ix,iz)=m*[uf*uz+vf*vz+wf*wz]
+    REPEAT
+  REPEAT LOOP
+#pragma omp parallel for
+  LOOP FOR iq=1 TO nq
+    RFFT2(q(iq,*,*),Q(iy,iq,*,*))
+  REPEAT LOOP
+END spectra
+
+! Raw pair sums of planes iy1 and iy2
+! -------------------------------
+ARRAY(1..10,0..nx-1,0..nz DIV 2) OF COMPLEX SC=0
+ARRAY(1..10,0..nx-1,0..nz-1) OF REAL SP=0
+SUBROUTINE pairsums(INTEGER iy1, iy2)
+  ! Cross-spectra summed into the spectra of the pair sums
+#pragma omp parallel for
+  LOOP FOR ix=0 TO nx-1
+    SC(*,ix,*)=0
+    LOOP FOR t=1 TO nterms WITH terms(t)
+      DO SC(k,ix,iz)=~+c*CONJG(Q(iy1,f,ix,iz))*Q(iy2,g,ix,iz) FOR iz=0 TO nz DIV 2
+    REPEAT
+  REPEAT LOOP
+  ! Back to physical space, sampled at the separations
+#pragma omp parallel for
+  LOOP FOR k=1 TO 10
+    HFFT2(SC(k,*,*),SP(k,*,*))
+    DO SR(jx*mz+jz,k)=SP(k,imx(jx),imz(jz))/(nx*nz) FOR jx=0 TO mx-1 AND jz=0 TO mz-1
+  REPEAT LOOP
+END pairsums
+
+! Compute Kolmogorov Equation
+! -------------------------------
+LOOP files FOR n=nfmin TO nfmax BY dn
+  WRITE "iproc=",iproc, "   ","snapshot ", n, " of ", nfmax
+  readsnapshot(n)
+  t1=wallclock(); DO spectra(iy) FOR iy=-1 TO ny+1
+  WRITE "iproc=",iproc, "   ", "   ", "Spectra took ", wallclock()-t1, " seconds"
+  LOOP outer FOR IY1=nyl TO nyh
+    t1=wallclock(); loadgke(IY1,n)
+    LOOP FOR sig IN (1,-1)
+      ! Symmetry-aware helper variables
+      iy1=IF sig=1 THEN IY1 ELSE ny-IY1
+      LOOP inner FOR IY2=IY1 TO ny-IY1
+        iy2=IF sig=1 THEN IY2 ELSE ny-IY2
+        mean(1)=uiujimage.meandata(iy1); uiuj(1)=uiujimage.uiujdata(iy1)
+        mean(2)=uiujimage.meandata(iy2); uiuj(2)=uiujimage.uiujdata(iy2)
+        pairsums(iy1,iy2)
+        addpairsums(IY2,sig)
+      REPEAT inner
+    REPEAT
+    savegke(IY1,n)
+    WRITE "iproc=",iproc, "   ", "   ", "IY1= ",IY1, " of ", nyh, " took ", wallclock()-t1, " seconds"
+  REPEAT outer
+REPEAT files
+
+CLOSE(gkedata)
+CLOSE(uiujimage)

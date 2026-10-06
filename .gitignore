@@ -8,13 +8,7 @@
 .cpl/
 
 # Compiled CPL programs
-step1/step1_singlepoints_fourier
-step1/step1_singlepoints_physical
-step2/step2_gke_fourier
-step2/step2_gke_physical
+step1/step1_singlepoints
+step2/step2_gke
+step2/step2_gke_direct
 step3/step3_gke
-
-# Tutorial output data
-tutorial/gke.bin
-tutorial/uiuj.bin
-tutorial/mask.*.fld

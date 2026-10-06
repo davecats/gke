@@ -1,0 +1,123 @@
+!
+! Computes the source term, space and scale flux
+! in the generalized Kolmogorov equation specialized
+! for channel flow, as in Marati, Casciola, Piva, JFM 2004,
+! equation 3.4 and following definitions.
+!
+! Direct implementation: the raw pair sums (see pairsums.cpl) are
+! accumulated explicitly over all pairs of fluid points (x, x+r) of each pair
+! of wall-parallel planes. The cost is proportional to the number of points
+! times the number of separations, so that this program serves mainly as a
+! reference for the much faster step2_gke.cpl, which computes the same sums
+! (identical up to round-off) with FFTs. The accumulation kernel runs
+! serially, on OpenMP threads (compile with -fopenmp; the results are
+! identical to the serial ones down to the last bit) or on a GPU (OpenACC,
+! see Makefile).
+!
+! This program allows distributed memory parallelization by distributing
+! the arrays containing the terms of the Generalized Kolmogorov Equations (GKE)
+! along the wall-normal direction.
+!
+! -----------------------------------------------------------------------------
+! If you use this code and find it helpful please cite
+! 
+! D. Gatti et al., "An efficient numerical method for the Generalized Kolmogorov
+! Equation", Journal of Turbulence, (submitted, 2018)
+! -----------------------------------------------------------------------------
+!
+! Copyright (C) 2018  Dr. Davide Gatti
+!
+! This program is free software: you can redistribute it and/or modify
+! it under the terms of the GNU General Public License as published by
+! the Free Software Foundation, either version 3 of the License, or
+! any later version.
+!
+! This program is distributed in the hope that it will be useful,
+! but WITHOUT ANY WARRANTY; without even the implied warranty of
+! MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+! GNU General Public License for more details.
+!
+! You should have received a copy of the GNU General Public License
+! along with this program.  If not, see <https://www.gnu.org/licenses/>.
+! 
+! Contacts:
+!
+! Dr. Davide Gatti  
+! davide.gatti [at] kit.edu
+! msc.davide.gatti [at] gmail.com
+! 
+! Karlsruhe Institute of Technology
+! Institute of Fluid Dynamics
+! Kaiserstraße 10
+! 76131 Karlsruhe 
+! 
+
+
+USE ../gkedata
+USE pairsums
+USE ../wallclock
+REAL t1
+
+! Raw pair sums of the planes loaded as plane 1 and 2. Each jj identifies
+! one independent separation (jx,jz), whose sums are written to SR: on the
+! GPU (OpenACC build), on a thread pool (OpenMP build) or serially.
+SUBROUTINE pairsums()
+#pragma acc update device(PH,gmask)
+#pragma acc parallel loop gang present(PH,gmask,imx,imz,SR)
+#pragma omp parallel for schedule(dynamic)
+  LOOP FOR jj=0 TO mx*mz-1
+    INTEGER jx=jj DIV mz, jz=jj MOD mz
+    INTEGER rx=imx(jx), rz=imz(jz), npair=0
+    REAL sSE=0, sFX=0, sFY=0, sFZ=0, sFC=0, sUV=0, sUVS=0, sGX=0, sGZ=0
+#pragma acc loop vector collapse(2) reduction(+:sSE,sFX,sFY,sFZ,sFC,sUV,sUVS,sGX,sGZ,npair)
+    LOOP FOR ix=0 TO nx-1
+      LOOP FOR iz=0 TO nz-1
+        INTEGER ix2=(ix+rx) MOD nx, iz2=(iz+rz) MOD nz
+        IF gmask(1,ix,iz)>0.5 AND gmask(2,ix2,iz2)>0.5 THEN
+          REAL du=PH(2,fU,ix2,iz2)-PH(1,fU,ix,iz), dv=PH(2,fV,ix2,iz2)-PH(1,fV,ix,iz), dw=PH(2,fW,ix2,iz2)-PH(1,fW,ix,iz)
+          REAL dpp=PH(2,fP,ix2,iz2)-PH(1,fP,ix,iz), vs=PH(1,fV,ix,iz)+PH(2,fV,ix2,iz2)
+          REAL e2=du*du+dv*dv+dw*dw
+          sSE=~+e2; sFX=~+e2*du; sFY=~+e2*dv; sFZ=~+e2*dw
+          sFC=~+0.5*vs*e2+2*dpp*dv
+          sUV=~+du*dv; sUVS=~+du*vs
+          sGX=~+du*(PH(1,fUX,ix,iz)+PH(2,fUX,ix2,iz2))+dv*(PH(1,fVX,ix,iz)+PH(2,fVX,ix2,iz2))+dw*(PH(1,fWX,ix,iz)+PH(2,fWX,ix2,iz2))
+          sGZ=~+du*(PH(1,fUZ,ix,iz)+PH(2,fUZ,ix2,iz2))+dv*(PH(1,fVZ,ix,iz)+PH(2,fVZ,ix2,iz2))+dw*(PH(1,fWZ,ix,iz)+PH(2,fWZ,ix2,iz2))
+          INC npair
+        END IF
+      REPEAT
+    REPEAT
+    SR(jj,kSE)=sSE; SR(jj,kFX)=sFX; SR(jj,kFY)=sFY; SR(jj,kFZ)=sFZ; SR(jj,kFC)=sFC
+    SR(jj,kUV)=sUV; SR(jj,kUVS)=sUVS; SR(jj,kGX)=sGX; SR(jj,kGZ)=sGZ; SR(jj,kN)=npair
+  REPEAT
+#pragma acc update host(SR)
+END pairsums
+
+! Compute Kolmogorov Equation
+! -------------------------------
+! Keep the plane fields, the mask, the separations and the pair-sum buffer
+! resident on the GPU in the OpenACC build (no effect otherwise)
+#pragma acc enter data copyin(PH,gmask,imx,imz,SR)
+LOOP files FOR n=nfmin TO nfmax BY dn
+  WRITE "iproc=",iproc, "   ","snapshot ", n, " of ", nfmax
+  readsnapshot(n)
+  LOOP outer FOR IY1=nyl TO nyh
+    t1=wallclock(); loadgke(IY1,n)
+    LOOP FOR sig IN (1,-1)
+      ! Symmetry-aware helper variables
+      iy1=IF sig=1 THEN IY1 ELSE ny-IY1
+      loadplane(1,iy1)
+      LOOP inner FOR IY2=IY1 TO ny-IY1
+        iy2=IF sig=1 THEN IY2 ELSE ny-IY2
+        loadplane(2,iy2)
+        pairsums()
+        addpairsums(IY2,sig)
+      REPEAT inner
+    REPEAT
+    savegke(IY1,n)
+    WRITE "iproc=",iproc, "   ", "   ", "IY1= ",IY1, " of ", nyh, " took ", wallclock()-t1, " seconds"
+  REPEAT outer
+REPEAT files
+
+#pragma acc exit data delete(PH,gmask,imx,imz,SR)
+CLOSE(gkedata)
+CLOSE(uiujimage)
